@@ -16,7 +16,8 @@ T Cached_item_new(char *key, char *value, int value_size, int relative_storage_t
     T cached_item = malloc(sizeof(*cached_item));
     assert(cached_item != NULL);
     cached_item->key = key;
-    cached_item->value = value;
+    cached_item->value = malloc(value_size);
+    memcpy(cached_item->value, value, value_size);
     cached_item->initial_storage_time = (intmax_t) time(NULL);
     cached_item->relative_storage_time = relative_storage_time;
     cached_item->max_age = max_age;
