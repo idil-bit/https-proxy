@@ -58,6 +58,7 @@ int main(int argc, char* argv[])
 
 	cache = Cache_new(CACHE_SIZE);
 	Message partialMessages[FD_SETSIZE];
+	char *hostnames[FD_SETSIZE]; // mapping of serverSD to hostnames
 	int clientToServer[FD_SETSIZE]; // for each clientSD, the serverSD they talk to
 	int serverToClient[FD_SETSIZE]; // for each serverSD, the clientSD they talk to
 	for (int i = 0; i < FD_SETSIZE; i++) {
@@ -105,6 +106,9 @@ int main(int argc, char* argv[])
 					
 					int read_result = add_to_Message(&(partialMessages[i]), i);
 					if (read_result == 0) {
+						if (strstr(partialMessages[i].buffer, "CONNECT") != NULL) {
+							printf("connect received!: \n%s\n", partialMessages[i].buffer);
+						}
 						
 						// check if response is already cached
 						char *placeholder_host;
@@ -114,6 +118,7 @@ int main(int argc, char* argv[])
 						Cached_item cached_response = Cache_get(cache, host);
 						free(host);
 						if (cached_response != NULL) {
+							printf("hit cache!\n");
 							
 							if (write(i, cached_response->value, cached_response->value_size) == -1) {
 								// remove client
@@ -127,6 +132,7 @@ int main(int argc, char* argv[])
 						} else {
 							
 							int serverSD = get_server_socket(partialMessages[i].buffer);
+							hostnames[serverSD] = get_host(partialMessages[i].buffer);
 							/* TODO: check if -1 and handle accordingly */
 
 							// add to clientToServer and serverToClient
@@ -193,10 +199,10 @@ int main(int argc, char* argv[])
 							/* TODO: should we test for best max age value or is there a good default? */
 							do {
 								Cache_put(cache, 
-										get_host(partialMessages[i].buffer), 
-									partialMessages[i].buffer, 
-									partialMessages[i].total_length, 
-									get_max_age(partialMessages[i].buffer));
+									  hostnames[i], 
+									  partialMessages[i].buffer, 
+									  partialMessages[i].total_length, 
+									  get_max_age(partialMessages[i].buffer));
 								
 							} while (update_Message(&partialMessages[i]) == 0);
 						}
