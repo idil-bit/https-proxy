@@ -4,6 +4,9 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <openssl/ssl.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
 
 // -1 if error
 // otherwise socket descriptor for the server
@@ -54,77 +57,6 @@ int get_server_socket(char *message) {
     return serverSD;
 }
 
-// -1 if error
-// 0 if success
-/*
-int get_server_socket(char *message) {
-    char *hostname = NULL;
-    int portnumber;
-    get_host(message, &hostname, &portnumber);
-
-    struct hostent *server = gethostbyname(hostname);
-	if (server == NULL) { return -1; }
-
-    struct sockaddr_in serv_addr;
-	bzero((char *) &serv_addr, sizeof(serv_addr));
-	serv_addr.sin_family = AF_INET;
-	bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr, server->h_length);
-	serv_addr.sin_port = htons(portnumber);
-	
-    int serverSD = socket(AF_INET, SOCK_STREAM, 0);
-
-    // set socket as non blocking
-    int flags = fcntl(serverSD, F_GETFL, 0);
-    flags = flags | O_NONBLOCK;
-    if (fcntl(serverSD, F_SETFL, flags) < 0) {
-        perror("fcntl(F_SETFL)");
-        return 1;
-    }
-    
-    // socket is non blocking so connect call will be in progress when returning
-    // check if connect was successful by checking if socket is ready for writing in select call    
-    connect(serverSD, (struct sockaddr *) &serv_addr, sizeof(serv_addr));
-    return serverSD;
-}
-*/
-
-// returns heap allocated string of host:port
-// sets hostname and portnumber pointers
-/*
-char *get_host(char *message, char **hostname, int *portnumber) {
-    char *host_ptr = strstr(message, "Host: ");
-    if (host_ptr == NULL) {
-        return NULL;
-    }
-    char *host_start = host_ptr + strlen("Host: ");
-    char *host_end = host_start;
-    char *port = NULL;
-    while (*host_end != '\r') {
-        if (*host_end == ':') {
-            port = host_end;
-        }
-        host_end++;
-    }
-    int host_length = host_end - host_start;
-    char *host = malloc(host_length + 4); // + 3 for :80, + 1 for \n
-    memcpy(host, host_start, host_length);
-
-    // *hostname = malloc(host_length + 1);
-    // memcpy(*hostname, host, host_length);
-    // *hostname[host_length] = '\0';
-
-    if (port == NULL) {
-        // TODO: change to 443 when using HTTPS 
-        memcpy(host + host_length, ":80", 4);
-        // *portnumber = 80;
-    } else {
-        host[host_length] = '\0';
-        // *portnumber = atoi(host + host_length  + 1);
-    }
-    return host;
-}
-*/
-
 // returns heap allocated string of host:port
 char *get_host(char *message) {
     char *host_ptr = strstr(message, "Host: ");
@@ -141,10 +73,14 @@ char *get_host(char *message) {
         host_end++;
     }
     int host_length = host_end - host_start;
-    char *host = malloc(host_length + 4); // + 3 for :80, + 1 for \n
+    char *host = malloc(host_length + 5); // + 4 for :443, + 1 for \0
     memcpy(host, host_start, host_length);
     if (port == NULL) {
-        memcpy(host + host_length, ":80", 4);
+        if (strstr(message, "CONNECT") != NULL) {
+            memcpy(host + host_length, ":443", 5);
+        } else {
+            memcpy(host + host_length, ":80", 4);
+        }
     } else {
         host[host_length] = '\0';
     }
@@ -168,4 +104,62 @@ int get_max_age(char *request) {
     }
     free(line);
     return max_age;
+}
+
+SSL_CTX *create_context() {
+    const SSL_METHOD *method;
+    SSL_CTX *ctx;
+
+    method = TLS_server_method();
+
+    ctx = SSL_CTX_new(method);
+    if (!ctx) {
+        perror("Unable to create SSL context");
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
+    }
+
+    return ctx;
+}
+
+// -1 error
+// 0 success
+void configure_context_client(SSL_CTX *ctx) {
+    /* will use domain specific certificate that is created dynamically */
+    /* get_domain_certificate will return a X509 * object */
+    if (SSL_CTX_use_certificate(ctx, get_domain_certificate()) <= 0) {
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
+    if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
+    return 0;
+}
+
+/* takes in hostname:port */
+void configure_context_server(SSL_CTX *ctx, char *host) {
+    /* make sure to verify server's certificate */
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, 0);
+
+    /* remove port from hostname */
+    char *port_ptr = host;
+    while(*port_ptr != ':') {
+        port_ptr++;
+    }
+    *port_ptr = '\0'; // null terminate host
+    
+    X509_VERIFY_PARAM *vpm = SSL_CTX_get0_param(ctx);
+    X509_VERIFY_PARAM_set1_host(vpm, host, 0);
+
+    /* restore host w/ port */
+    *port_ptr = ':';
+
+    if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
+    }
 }

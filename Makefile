@@ -1,7 +1,8 @@
 src = $(wildcard *.c)
 obj = $(src:.c=.o)
 CC = gcc
-LDFLAGS = -lnsl
+CFLAGS = -Wall -Wextra -g -I/usr/include/openssl
+LDFLAGS = -L/usr/lib -lssl -lcrypto -lnsl
 
 a.out: $(obj)
 	$(CC) -o $@ $^ $(LDFLAGS)
