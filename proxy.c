@@ -228,7 +228,7 @@ int main(int argc, char* argv[])
                     // don't expect code to ever reach here
                     printf("TODO: unexpected socket %d open\n", i);
                         }
-                    }
+            }
             if (FD_ISSET(i, &write_fd_set_copy)) {
                 clientSD = serverToClient[i];
 
@@ -287,8 +287,8 @@ int main(int argc, char* argv[])
 
             }
         }
-        }
+    }
 
-        if (close(proxySD) == -1) { return -1; }
-        return 0;
+    if (close(proxySD) == -1) { return -1; }
+    return 0;
 }
