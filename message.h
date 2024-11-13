@@ -15,7 +15,7 @@ typedef struct Message Message;
 void create_Message(Message *msg);
 int add_to_Message(Message *message, int sd);
 void expand_buffer(Message *message);
-int check_message(Message *message);
+int check_message(Message *message, int sd);
 int update_Message(Message *message);
 
 #endif

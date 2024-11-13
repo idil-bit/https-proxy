@@ -34,36 +34,45 @@ int add_to_Message(Message *message, int sd) {
 
         message->bytes_read += read_bytes;
         message->buffer[message->bytes_read] = '\0';
-        printf("message is as follows\n%s\n", message->buffer);
+        if (message->bytes_read == message->total_length) {
+            printf("message from socket %d is as follows:\n", sd);
+            fwrite(message->buffer, 1, 20, stdout);
+            printf("\n");
+        }
         return (message->bytes_read == message->total_length) ? 0 : 1;
     } else {
         // read in until end of buffer
         ssize_t read_bytes = read(sd, currIndex, message->buffer_size - message->bytes_read - 1);
-        printf("read %d bytes\n", read_bytes);
-        if (read_bytes <= 0) {
-            return -1;
-        }
 
         message->bytes_read += read_bytes;
         message->buffer[message->bytes_read] = '\0';
-        printf("message is as follows\n%s\n", message->buffer);
         // check if header is fully read
-        return check_message(message);
+        return check_message(message, sd);
     }
 }
 
-int check_message(Message *message) {
+int check_message(Message *message, int sd) {
     char *endOfResponse = strstr(message->buffer, "\r\n\r\n");
     if (endOfResponse != NULL) {
         message->header_read = true;
         int headerSize = endOfResponse + 4 - message->buffer;
         message->total_length = headerSize;
         if (strstr(message->buffer, "GET") != NULL) {
+            if (message->bytes_read >= message->total_length) {
+                printf("message from socket %d is as follows:\n", sd);
+                fwrite(message->buffer, 1, 20, stdout);
+                printf("\n");
+            }
             return 0;
         } 
         // find the content-length field
         char *contentLenIndex = strstr(message->buffer, "Content-Length: ");
         if (contentLenIndex == NULL) {
+            if (message->bytes_read >= message->total_length) {
+                printf("message from socket %d is as follows:\n", sd);
+                fwrite(message->buffer, 1, 20, stdout);
+                printf("\n");
+            }
             return 0; // assume no content length field means no message body
         } else {
             contentLenIndex += strlen("Content-Length: ");
@@ -75,6 +84,11 @@ int check_message(Message *message) {
                 free(message->buffer);
                 message->buffer_size = message->total_length;
                 message->buffer = new_buffer;
+            }
+            if (message->bytes_read >= message->total_length) {
+                printf("message from socket %d is as follows:\n", sd);
+                fwrite(message->buffer, 1, 20, stdout);
+                printf("\n");
             }
             return (message->bytes_read >= message->total_length) ? 0 : 1;
         }
@@ -114,6 +128,6 @@ int update_Message(Message *message) {
         message->bytes_read = curr_length;
         message->header_read = false;
 
-        return check_message(message);
+        return check_message(message, 0);
     }
 }

@@ -106,60 +106,60 @@ int get_max_age(char *request) {
     return max_age;
 }
 
-SSL_CTX *create_context() {
-    const SSL_METHOD *method;
-    SSL_CTX *ctx;
+// SSL_CTX *create_context() {
+//     const SSL_METHOD *method;
+//     SSL_CTX *ctx;
 
-    method = TLS_server_method();
+//     method = TLS_server_method();
 
-    ctx = SSL_CTX_new(method);
-    if (!ctx) {
-        perror("Unable to create SSL context");
-        ERR_print_errors_fp(stderr);
-        exit(EXIT_FAILURE);
-    }
+//     ctx = SSL_CTX_new(method);
+//     if (!ctx) {
+//         perror("Unable to create SSL context");
+//         ERR_print_errors_fp(stderr);
+//         exit(EXIT_FAILURE);
+//     }
 
-    return ctx;
-}
+//     return ctx;
+// }
 
-// -1 error
-// 0 success
-void configure_context_client(SSL_CTX *ctx) {
-    /* will use domain specific certificate that is created dynamically */
-    /* get_domain_certificate will return a X509 * object */
-    if (SSL_CTX_use_certificate(ctx, get_domain_certificate()) <= 0) {
-        ERR_print_errors_fp(stderr);
-        return -1;
-    }
+// // -1 error
+// // 0 success
+// void configure_context_client(SSL_CTX *ctx) {
+//     /* will use domain specific certificate that is created dynamically */
+//     /* get_domain_certificate will return a X509 * object */
+//     if (SSL_CTX_use_certificate(ctx, get_domain_certificate()) <= 0) {
+//         ERR_print_errors_fp(stderr);
+//         return -1;
+//     }
 
-    if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
-        ERR_print_errors_fp(stderr);
-        return -1;
-    }
+//     if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
+//         ERR_print_errors_fp(stderr);
+//         return -1;
+//     }
 
-    return 0;
-}
+//     return 0;
+// }
 
-/* takes in hostname:port */
-void configure_context_server(SSL_CTX *ctx, char *host) {
-    /* make sure to verify server's certificate */
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, 0);
+// /* takes in hostname:port */
+// void configure_context_server(SSL_CTX *ctx, char *host) {
+//     /* make sure to verify server's certificate */
+//     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, 0);
 
-    /* remove port from hostname */
-    char *port_ptr = host;
-    while(*port_ptr != ':') {
-        port_ptr++;
-    }
-    *port_ptr = '\0'; // null terminate host
+//     /* remove port from hostname */
+//     char *port_ptr = host;
+//     while(*port_ptr != ':') {
+//         port_ptr++;
+//     }
+//     *port_ptr = '\0'; // null terminate host
     
-    X509_VERIFY_PARAM *vpm = SSL_CTX_get0_param(ctx);
-    X509_VERIFY_PARAM_set1_host(vpm, host, 0);
+//     X509_VERIFY_PARAM *vpm = SSL_CTX_get0_param(ctx);
+//     X509_VERIFY_PARAM_set1_host(vpm, host, 0);
 
-    /* restore host w/ port */
-    *port_ptr = ':';
+//     /* restore host w/ port */
+//     *port_ptr = ':';
 
-    if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
-        ERR_print_errors_fp(stderr);
-        exit(EXIT_FAILURE);
-    }
-}
+//     if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
+//         ERR_print_errors_fp(stderr);
+//         exit(EXIT_FAILURE);
+//     }
+// }

@@ -105,6 +105,7 @@ int main(int argc, char* argv[])
                     			clientSD = accept(proxySD, (struct sockaddr *) &caddr, (unsigned int *) &clen);
                     			FD_SET(clientSD, &read_fd_set);
 					FD_SET(clientSD, &clients_set);
+                    printf("adding socket %d to client and read set\n", clientSD);
 					create_Message(&(partialMessages[clientSD]));
 				} else if (FD_ISSET(i, &clients_set)) {
 					int read_result = add_to_Message(&(partialMessages[i]), i);
@@ -132,15 +133,17 @@ int main(int argc, char* argv[])
 							char *host = get_host(partialMessages[i].buffer);
 							Cached_item cached_response = Cache_get(cache, host);
 							free(host);
-							if (cached_response != NULL) {							
+							if (cached_response != NULL) {		
+                                printf("hit cache!\n");					
 								if (write(i, cached_response->value, cached_response->value_size) == -1) {
 									// remove client
+                                    printf("writing to client failed - removing socket %d from client and read set\n", i);
 									close(i);
-									FD_CLR(clientSD, &clients_set);
-									FD_CLR(clientSD, &read_fd_set);
-									free(partialMessages[clientSD].buffer);
-									partialMessages[clientSD].buffer = NULL;
-									clientToServer[clientSD] = -1;
+									FD_CLR(i, &clients_set);
+									FD_CLR(i, &read_fd_set);	
+                                    free(partialMessages[i].buffer);
+									partialMessages[i].buffer = NULL;
+									clientToServer[i] = -1;
 								}
 							} else {
 								int serverSD = get_server_socket(partialMessages[i].buffer);
@@ -148,6 +151,7 @@ int main(int argc, char* argv[])
 								/* TODO: check if -1 and handle accordingly */
 
 								// add to clientToServer and serverToClient
+                                printf("adding server socket %d to server and write set\n", serverSD);
 								FD_SET(serverSD, &servers_set);
 								FD_SET(serverSD, &write_fd_set);
 								clientToServer[i] = serverSD;
@@ -170,6 +174,7 @@ int main(int argc, char* argv[])
 					// if corresponding client has closed the connection
 					if (clientToServer[clientSD] == -1) {
 						// close this connection and remove from sets
+                        printf("corresponding client connection was closed - removing server socket %d from server, write, and read set\n", i);
 						close(i);
 						FD_CLR(i, &servers_set);
 						FD_CLR(i, &write_fd_set);
@@ -192,10 +197,11 @@ int main(int argc, char* argv[])
 						FD_CLR(i, &servers_set);
 						FD_CLR(i, &write_fd_set);
 						FD_CLR(i, &read_fd_set);
+						printf("read failed - cleared %d from server", i);
 						serverToClient[i] = -1;
 						free(partialMessages[i].buffer);
 						partialMessages[i].buffer = NULL;
-					} else {
+                    } else {
 						// send chunk we just read in (from old bytes read to current bytes read)
 						if (write(clientSD, partialMessages[i].buffer + old_bytes_read, 
 								partialMessages[i].bytes_read - old_bytes_read) == -1) {
@@ -220,15 +226,16 @@ int main(int argc, char* argv[])
 					}
 				} else {
 					// don't expect code to ever reach here
-					printf("TODO: unexpected socket open\n");
+					printf("TODO: unexpected socket %d open\n", i);
                 		}
             		}
-			if (FD_ISSET(i, &write_fd_set_copy)) {
+            if (FD_ISSET(i, &write_fd_set_copy)) {
 				clientSD = serverToClient[i];
 
 				/* connect was successful - don't need to check if socket is open for writing anymore */
 				FD_CLR(i, &write_fd_set);
 				FD_SET(i, &read_fd_set);
+				printf("connection to socket %d was successful - added to read and cleared from write\n", i);
 
 				/* if i is an ssl connection: send back 200 ok to client */
 				if (connectionTypes[i].isHTTPs) {
@@ -244,18 +251,22 @@ int main(int argc, char* argv[])
 					/* TODO: initiate ssl handshake w/ server and accept ssl handshake from client */
 
 					/* create ssl object for server */
+                    /*
 					SSL_CTX *ctx_server = create_context();
-					configure_context_server(ctx_server, hostnames[i]); /* configure context */
+					configure_context_server(ctx_server, hostnames[i]); 
 					SSL *ssl_server;
 					ssl_server = SSL_new(ctx_server);
 					connectionTypes[i].ssl = ssl_server;
+                    */
 
 					/* create ssl object for client */
+                    /*
 					SSL_CTX *ctx_client = create_context();
-					configure_context_client(ctx_client); /* configure context */
+					configure_context_client(ctx_client); 
 					SSL *ssl_client;
 					ssl_client = SSL_new(ctx_client);
 					connectionTypes[clientSD].ssl = ssl_client;
+                    */
 
 				} else {
 					if (write(i, partialMessages[clientSD].buffer, partialMessages[clientSD].total_length) == -1) { 
@@ -267,6 +278,8 @@ int main(int argc, char* argv[])
 
 						// add to clientToServer and serverToClient
 						FD_SET(serverSD, &servers_set);
+                        FD_SET(serverSD, &write_fd_set);
+						printf("socket %d added to servers\n", serverSD);
 						clientToServer[i] = serverSD;
 						serverToClient[serverSD] = i;
 					}
