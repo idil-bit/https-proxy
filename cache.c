@@ -111,9 +111,17 @@ Cached_item Cache_get(T cache, char *key) {
     while (i < cache->size) {
         curr = cache->cached_items[i];
         if (curr != NULL && strcmp(curr->key, key) == 0) {
-            cache->cached_items[i]->retrieval_time = cache->curr_time;
-            cache->curr_time++;
-            return cache->cached_items[i];
+            /* check if item is expired */
+            if (Cached_item_expiration(curr) <= (intmax_t) time(NULL)) {
+                printf("item expired");
+                Cached_item_free(&curr);
+                cache->cached_items[i] = NULL;
+                return NULL;
+            } else {
+                curr->retrieval_time = cache->curr_time;
+                cache->curr_time++;
+                return curr;
+            }
         }
         i++;
     }

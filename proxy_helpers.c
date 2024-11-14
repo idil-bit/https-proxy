@@ -7,6 +7,8 @@
 #include <openssl/ssl.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
+#include <openssl/err.h>
+#include <ctype.h>
 
 // -1 if error
 // otherwise socket descriptor for the server
@@ -38,8 +40,10 @@ int get_server_socket(char *message) {
 
     /* create the socket */
     int serverSD = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSD < 0) 
+    if (serverSD < 0) {
         fprintf(stderr, "ERROR opening socket");
+        return -1;
+    }
 
     // set socket as non blocking
     int flags = fcntl(serverSD, F_GETFL, 0);
@@ -88,6 +92,7 @@ char *get_host(char *message) {
 }
 
 int get_max_age(char *request) {
+    return 10; // for debugging 
     char *line_start = strstr(request, "Cache-Control: ");
     if (line_start == NULL) {
         return 3600;
@@ -106,9 +111,26 @@ int get_max_age(char *request) {
     return max_age;
 }
 
-// SSL_CTX *create_context() {
-//     const SSL_METHOD *method;
-//     SSL_CTX *ctx;
+/* assumes request is a get request */
+/* returns heap allocated string containing request identifier domain:port/url */
+char *get_identifier(char *request) { 
+    char *host = get_host(request);
+    char *url_start = strstr(request, " ") + 1;
+    char *url_end = url_start;
+    while (!isspace(*url_end)) {
+        url_end++;
+    }
+    /* malloc enough memory for host, url and null terminator */
+    int host_len = strlen(host);
+    int url_len = url_end - url_start;
+    char *identifier = malloc(host_len + url_len + 2);
+    memcpy(identifier, host, host_len);
+    identifier[host_len] = '/';
+    memcpy(identifier + host_len + 1, url_start, url_len);
+    identifier[host_len + url_len + 1] = '\0';
+    free(host);
+    return identifier;
+}
 
 //     method = TLS_server_method();
 

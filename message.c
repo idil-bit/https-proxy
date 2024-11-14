@@ -19,10 +19,6 @@ void create_Message(Message *message) {
 //  1: more to reading
 /* TODO: may want to add support for sending partial messages immediately after reading */
 int add_to_Message(Message *message, int sd) {
-    if (message->bytes_read == message->buffer_size) {
-        expand_buffer(message);
-    }
-
     char *currIndex = message->buffer + message->bytes_read;
     if (message->header_read) {
         int bytes_to_read = message->total_length - message->bytes_read;
@@ -31,9 +27,7 @@ int add_to_Message(Message *message, int sd) {
             return -1;
         }
 
-
         message->bytes_read += read_bytes;
-        message->buffer[message->bytes_read] = '\0';
         if (message->bytes_read == message->total_length) {
             printf("message from socket %d is as follows:\n", sd);
             fwrite(message->buffer, 1, 20, stdout);
@@ -42,9 +36,15 @@ int add_to_Message(Message *message, int sd) {
         return (message->bytes_read == message->total_length) ? 0 : 1;
     } else {
         // read in until end of buffer
-        ssize_t read_bytes = read(sd, currIndex, message->buffer_size - message->bytes_read - 1);
-
+        ssize_t read_bytes = read(sd, currIndex, message->buffer_size - message->bytes_read);
+        /* return -1 to signify error reading */
+        if (read_bytes <= 0) {
+            return -1;
+        }
         message->bytes_read += read_bytes;
+        if (message->bytes_read == message->buffer_size) {
+            expand_buffer(message);
+        }
         message->buffer[message->bytes_read] = '\0';
         // check if header is fully read
         return check_message(message, sd);
@@ -79,7 +79,7 @@ int check_message(Message *message, int sd) {
             int contentLength = atoi(contentLenIndex);
             message->total_length = contentLength + headerSize;
             if (message->buffer_size < message->total_length + 1) {
-                char *new_buffer = (char *) malloc(message->total_length + 1);
+                char *new_buffer = (char *) malloc(message->total_length);
                 memcpy(new_buffer, message->buffer, message->buffer_size);
                 free(message->buffer);
                 message->buffer_size = message->total_length;
@@ -97,7 +97,7 @@ int check_message(Message *message, int sd) {
 }
 
 void expand_buffer(Message *message) {
-    char *new_buffer = (char *) malloc(2 * message->buffer_size);
+    char *new_buffer = malloc(2 * message->buffer_size);
     memcpy(new_buffer, message->buffer, message->buffer_size);
     free(message->buffer);
     message->buffer_size *= 2;
@@ -112,6 +112,8 @@ int update_Message(Message *message) {
         free(message->buffer);
         message->buffer = NULL;
         create_Message(message);
+        return 1;
+    } else if (message->bytes_read < message->total_length) {
         return 1;
     } else {
         int curr_length = message->bytes_read - message->total_length;

@@ -1,10 +1,10 @@
 src = $(wildcard *.c)
 obj = $(src:.c=.o)
 CC = gcc
-CFLAGS = -Wall -Wextra -g 
+CFLAGS = -Wall -Wextra -g -fsanitize=address
 
 UNAME := $(shell uname)
-LDFLAGS = -L/usr/lib -lssl -lcrypto
+LDFLAGS = -L/usr/lib -lssl -lcrypto -fsanitize=address
 
 ifeq ($(UNAME), Linux)
     LDFLAGS += -lnsl
@@ -12,7 +12,8 @@ ifeq ($(UNAME), Linux)
 else ifeq ($(UNAME), Darwin)  # Check for macOS
     OPENSSL_DIR := $(shell brew --prefix openssl@3)
     CFLAGS += -I$(OPENSSL_DIR)/include
-    LDFLAGS += -L$(OPENSSL_DIR)/lib -lssl -lcrypto
+    LDFLAGS += -L$(OPENSSL_DIR)/lib
+
 endif
 
 
