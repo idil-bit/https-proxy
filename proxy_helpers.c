@@ -132,56 +132,144 @@ char *get_identifier(char *request) {
     return identifier;
 }
 
-//     method = TLS_server_method();
-
-//     ctx = SSL_CTX_new(method);
-//     if (!ctx) {
-//         perror("Unable to create SSL context");
-//         ERR_print_errors_fp(stderr);
-//         exit(EXIT_FAILURE);
-//     }
-
-//     return ctx;
-// }
-
-// // -1 error
-// // 0 success
-// void configure_context_client(SSL_CTX *ctx) {
-//     /* will use domain specific certificate that is created dynamically */
-//     /* get_domain_certificate will return a X509 * object */
-//     if (SSL_CTX_use_certificate(ctx, get_domain_certificate()) <= 0) {
-//         ERR_print_errors_fp(stderr);
-//         return -1;
-//     }
-
-//     if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
-//         ERR_print_errors_fp(stderr);
-//         return -1;
-//     }
-
-//     return 0;
-// }
-
-// /* takes in hostname:port */
-// void configure_context_server(SSL_CTX *ctx, char *host) {
-//     /* make sure to verify server's certificate */
-//     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, 0);
-
-//     /* remove port from hostname */
-//     char *port_ptr = host;
-//     while(*port_ptr != ':') {
-//         port_ptr++;
-//     }
-//     *port_ptr = '\0'; // null terminate host
+X509 *generate_x509(EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host)
+{
+    /* Allocate memory for the X509 structure. */
+    X509 * x509 = X509_new();
+    if(!x509)
+    {
+        fprintf(stderr, "Unable to create X509 structure.");
+        return NULL;
+    }
     
-//     X509_VERIFY_PARAM *vpm = SSL_CTX_get0_param(ctx);
-//     X509_VERIFY_PARAM_set1_host(vpm, host, 0);
+    /* Set the serial number. */
+    ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
+    
+    /* This certificate is valid from now until exactly one year from now. */
+    X509_gmtime_adj(X509_get_notBefore(x509), 0);
+    X509_gmtime_adj(X509_get_notAfter(x509), 31536000L);
+    
+    /* Set the public key for our certificate. */
+    X509_set_pubkey(x509, publicKey);
+    
+    /* We want to copy the subject name to the issuer name. */
+    X509_NAME * name = X509_get_subject_name(x509);
 
-//     /* restore host w/ port */
-//     *port_ptr = ':';
+    /* allow passing in identifier as hoost */
+    char *port_prt = host;
+    while (*port_ptr != ':' && *port_ptr != '\0') {
+        port_ptr++;
+    }
+    *port_ptr = '\0';
+    
+    /* Set the country code and common name. */
+    X509_NAME_add_entry_by_txt(name, "C",  MBSTRING_ASC, (unsigned char *)"US",        -1, -1, 0);
+    X509_NAME_add_entry_by_txt(name, "O",  MBSTRING_ASC, (unsigned char *)"MyCompany", -1, -1, 0);
+    /* TODO: set to server hostname */
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (unsigned char *) host, -1, -1, 0);
+    
+    /* Now set the issuer name. */
+    X509_set_issuer_name(x509, name);
 
-//     if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
-//         ERR_print_errors_fp(stderr);
-//         exit(EXIT_FAILURE);
-//     }
-// }
+
+    /* TODO: add SAN extension with host */
+    X509_EXTENSION *san_ext = NULL;
+    X509V3_CTX ctx;
+    STACK_OF(X509_EXTENSION) *exts = NULL;
+
+    // Initialize the X509V3 context
+    X509V3_set_ctx(&ctx, x509, x509, NULL, NULL, 0);
+
+    // Create the SAN extension
+    // The format is "DNS:hostname", for example, "DNS:example.com"
+    /* TODO: may want to check if host is ip and not dns */
+    char san_value[strlen(host) + 5]; // + 5 for "DNS:" and null terminator
+    snprintf(san_value, sizeof(san_value), "DNS:%s", host);
+
+    /* restore identifier w/ port */
+    *port_ptr = ':';
+    san_ext = X509V3_EXT_conf_nid(NULL, &ctx, NID_subject_alt_name, san_value);
+    if (!san_ext) {
+        fprintf(stderr, "Error creating SAN extension\n");
+        X509_free(x509);
+        return NULL;
+    }
+
+    // Add the extension to the certificate
+    if (!X509_add_ext(cert, san_ext, -1)) {
+        fprintf(stderr, "Error adding SAN extension to certificate\n");
+        X509_free(x509);
+        X509_EXTENSION_free(san_ext);
+        return NULL;
+    }
+
+    X509_EXTENSION_free(san_ext);
+    
+    /* Actually sign the certificate with our key. */
+    if(!X509_sign(x509, privateKey, EVP_sha1()))
+    {
+        fprintf(stderr, "Error signing certificate.\n");
+        X509_free(x509);
+        return NULL;
+    }
+    
+    return x509;
+}
+
+
+SSL_CTX *create_context() {
+
+    method = TLS_server_method();
+
+    ctx = SSL_CTX_new(method);
+    if (!ctx) {
+        perror("Unable to create SSL context");
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
+    }
+
+    return ctx;
+}
+
+// -1 error
+// 0 success
+void configure_context_client(SSL_CTX *ctx, EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host) {
+    /* will use domain specific certificate that is created dynamically */
+    /* get_domain_certificate will return a X509 * object */
+    X509 *cert = generate_x509(publicKey, privateKey, host);
+    if (SSL_CTX_use_certificate(ctx, generate_) <= 0) {
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
+    if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+
+    return 0;
+}
+
+/* takes in hostname:port */
+void configure_context_server(SSL_CTX *ctx, char *host) {
+    /* make sure to verify server's certificate */
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, 0);
+
+    /* remove port from hostname */
+    char *port_ptr = host;
+    while(*port_ptr != ':') {
+        port_ptr++;
+    }
+    *port_ptr = '\0'; // null terminate host
+    
+    X509_VERIFY_PARAM *vpm = SSL_CTX_get0_param(ctx);
+    X509_VERIFY_PARAM_set1_host(vpm, host, 0);
+
+    /* restore host w/ port */
+    *port_ptr = ':';
+
+    if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
+    }
+}

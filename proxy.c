@@ -34,6 +34,8 @@ int proxySD;
 Cache cache;
 Message partialMessages[FD_SETSIZE];
 char *identifiers[FD_SETSIZE]; // mapping of serverSD to cache identifiers
+EVP_PKEY *publicKey;
+EVP_PKEY *privateKey;
 
 void signal_handler(int signal) {
     (void) signal;
@@ -49,6 +51,8 @@ void signal_handler(int signal) {
             identifiers[i] = NULL;
         }
     }
+    EVP_PKEY_free(publicKey);
+    EVP_PKEY_free(privateKey);
     exit(EXIT_FAILURE);
 }
 
@@ -103,6 +107,13 @@ int main(int argc, char* argv[])
     int clientSD;
     int clen = sizeof(caddr);
 
+    FILE *public_fp = fopen("public.pem", "r");
+    FILE *private_fp = fopen("private.pem", "r");
+    publicKey = PEM_read_PUBKEY(public_fp, NULL, NULL, NULL);
+    privateKey = PEM_read_PrivateKey(private_fp, NULL, NULL, NULL);
+    fclose(public_fp);
+    fclose(private_fp);
+    
     while (1) {
         read_fd_set_copy = read_fd_set;
         write_fd_set_copy = write_fd_set;
@@ -311,15 +322,6 @@ int main(int argc, char* argv[])
                                 clientToServer[clientSD] = serverSD;
                                 serverToClient[serverSD] = clientSD;
                             }
-                                                        
-                            // do {
-                            //     Cache_put(cache, 
-                            //           identifiers[i], 
-                            //           partialMessages[i].buffer, 
-                            //           partialMessages[i].total_length, 
-                            //           get_max_age(partialMessages[i].buffer));
-                                
-                            // } while (update_Message(&partialMessages[i]) == 0);
                         }
                     }
                 } else {
@@ -366,22 +368,20 @@ int main(int argc, char* argv[])
                     /* TODO: initiate ssl handshake w/ server and accept ssl handshake from client */
 
                     /* create ssl object for server */
-                    /*
                     SSL_CTX *ctx_server = create_context();
                     configure_context_server(ctx_server, identifiers[i]); 
                     SSL *ssl_server;
                     ssl_server = SSL_new(ctx_server);
                     connectionTypes[i].ssl = ssl_server;
-                    */
 
                     /* create ssl object for client */
-                    /*
                     SSL_CTX *ctx_client = create_context();
-                    configure_context_client(ctx_client); 
+                    configure_context_client(ctx_client, publicKey, privateKey, identifiers[i]); 
                     SSL *ssl_client;
                     ssl_client = SSL_new(ctx_client);
                     connectionTypes[clientSD].ssl = ssl_client;
-                    */
+
+                    X509 *domain_specific_certificate = generate_x509(publicKey, privateKey, identifiers[i]);
 
                 } else {
                     printf("writing message of length %d to server\n", partialMessages[clientSD].total_length);
@@ -391,19 +391,6 @@ int main(int argc, char* argv[])
                         FD_CLR(i, &read_fd_set);
                         FD_CLR(i, &servers_set);
                     }
-                    // send next request if it has already been fully read in
-                    /*
-                    if (update_Message(&(partialMessages[clientSD])) == 0) {
-                        int serverSD = get_server_socket(partialMessages[i].buffer);
-
-                        // add to clientToServer and serverToClient
-                        FD_SET(serverSD, &servers_set);
-                        FD_SET(serverSD, &write_fd_set);
-                        printf("socket %d added to servers\n", serverSD);
-                        clientToServer[i] = serverSD;
-                        serverToClient[serverSD] = i;
-                    }
-                    */
                 }
 
             }
