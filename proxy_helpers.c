@@ -7,8 +7,13 @@
 #include <openssl/ssl.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
+#include <openssl/x509_vfy.h>
 #include <openssl/err.h>
+#include <openssl/asn1.h>
+#include <openssl/ossl_typ.h>
 #include <ctype.h>
+#include <openssl/rand.h>
 
 // -1 if error
 // otherwise socket descriptor for the server
@@ -25,6 +30,7 @@ int get_server_socket(char *message) {
     struct hostent *server = gethostbyname(host);
     if (server == NULL) {
         fprintf(stderr,"ERROR, no such host as %s\n", host);
+        free(host);
         return -1;
     }
 
@@ -143,7 +149,23 @@ X509 *generate_x509(EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host)
     }
     
     /* Set the serial number. */
-    ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
+    // ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
+    unsigned char serial_bytes[15];
+    RAND_bytes(serial_bytes, sizeof(serial_bytes));
+
+    // Convert the byte array to a BIGNUM
+    BIGNUM *bn_serial = BN_bin2bn(serial_bytes, sizeof(serial_bytes), NULL);
+
+    // Ensure the serial number is positive
+    if (BN_is_negative(bn_serial)) {
+        BN_set_negative(bn_serial, 0); // Make sure the serial number is positive
+    }
+
+    // Set the serial number for the certificate
+    ASN1_INTEGER *serial_number = X509_get_serialNumber(x509);
+    BN_to_ASN1_INTEGER(bn_serial, serial_number);
+    BN_free(bn_serial);
+
     
     /* This certificate is valid from now until exactly one year from now. */
     X509_gmtime_adj(X509_get_notBefore(x509), 0);
@@ -155,8 +177,8 @@ X509 *generate_x509(EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host)
     /* We want to copy the subject name to the issuer name. */
     X509_NAME * name = X509_get_subject_name(x509);
 
-    /* allow passing in identifier as hoost */
-    char *port_prt = host;
+    /* allow passing in identifier as host */
+    char *port_ptr = host;
     while (*port_ptr != ':' && *port_ptr != '\0') {
         port_ptr++;
     }
@@ -164,18 +186,20 @@ X509 *generate_x509(EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host)
     
     /* Set the country code and common name. */
     X509_NAME_add_entry_by_txt(name, "C",  MBSTRING_ASC, (unsigned char *)"US",        -1, -1, 0);
-    X509_NAME_add_entry_by_txt(name, "O",  MBSTRING_ASC, (unsigned char *)"MyCompany", -1, -1, 0);
-    /* TODO: set to server hostname */
-    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (unsigned char *) host, -1, -1, 0);
+    X509_NAME_add_entry_by_txt(name, "ST", MBSTRING_ASC, (unsigned char *)"Massachusetts", -1, -1, 0); 
+    X509_NAME_add_entry_by_txt(name, "O",  MBSTRING_ASC, (unsigned char *)"IandKProxy", -1, -1, 0);
+    /* set common name to server hostname*/
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (unsigned char *)host, -1, -1, 0);
     
-    /* Now set the issuer name. */
-    X509_set_issuer_name(x509, name);
+    /* set issuer name to match ca.crt */
+    const char *ca = "CA_NAME";
+    X509_NAME *issuer = X509_get_issuer_name(x509);
+    X509_NAME_add_entry_by_txt(issuer, "CN", MBSTRING_ASC,  (unsigned char *)ca, -1, -1, 0);
 
 
     /* TODO: add SAN extension with host */
     X509_EXTENSION *san_ext = NULL;
     X509V3_CTX ctx;
-    STACK_OF(X509_EXTENSION) *exts = NULL;
 
     // Initialize the X509V3 context
     X509V3_set_ctx(&ctx, x509, x509, NULL, NULL, 0);
@@ -195,8 +219,8 @@ X509 *generate_x509(EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host)
         return NULL;
     }
 
-    // Add the extension to the certificate
-    if (!X509_add_ext(cert, san_ext, -1)) {
+    // Add the san extension to the certificate
+    if (!X509_add_ext(x509, san_ext, -1)) {
         fprintf(stderr, "Error adding SAN extension to certificate\n");
         X509_free(x509);
         X509_EXTENSION_free(san_ext);
@@ -204,9 +228,27 @@ X509 *generate_x509(EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host)
     }
 
     X509_EXTENSION_free(san_ext);
+
+    /* adding serverAuth */
+    X509_EXTENSION *eku_ext = X509V3_EXT_conf_nid(NULL, &ctx, NID_ext_key_usage, "serverAuth");
+    if (!eku_ext) {
+        fprintf(stderr, "Error creating EKU extension\n");
+        X509_free(x509);
+        return NULL;
+    }
+
+    if (!X509_add_ext(x509, eku_ext, -1)) {
+        fprintf(stderr, "Error adding EKU extension\n");
+        X509_free(x509);
+        X509_EXTENSION_free(eku_ext);
+        return NULL;
+    }
+
+    X509_EXTENSION_free(eku_ext);
+
     
     /* Actually sign the certificate with our key. */
-    if(!X509_sign(x509, privateKey, EVP_sha1()))
+    if(!X509_sign(x509, privateKey, EVP_sha256()))
     {
         fprintf(stderr, "Error signing certificate.\n");
         X509_free(x509);
@@ -217,11 +259,8 @@ X509 *generate_x509(EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host)
 }
 
 
-SSL_CTX *create_context() {
-
-    method = TLS_server_method();
-
-    ctx = SSL_CTX_new(method);
+SSL_CTX *create_context(const SSL_METHOD *method) {
+    SSL_CTX *ctx = SSL_CTX_new(method);
     if (!ctx) {
         perror("Unable to create SSL context");
         ERR_print_errors_fp(stderr);
@@ -233,16 +272,17 @@ SSL_CTX *create_context() {
 
 // -1 error
 // 0 success
-void configure_context_client(SSL_CTX *ctx, EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host) {
+int configure_context_client(SSL_CTX *ctx, EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host) {
     /* will use domain specific certificate that is created dynamically */
     /* get_domain_certificate will return a X509 * object */
     X509 *cert = generate_x509(publicKey, privateKey, host);
-    if (SSL_CTX_use_certificate(ctx, generate_) <= 0) {
+    if (SSL_CTX_use_certificate(ctx, cert) <= 0) {
         ERR_print_errors_fp(stderr);
         return -1;
     }
+    X509_free(cert);
 
-    if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
+    if (SSL_CTX_use_PrivateKey(ctx, privateKey) <= 0 ) {
         ERR_print_errors_fp(stderr);
         return -1;
     }
@@ -251,9 +291,9 @@ void configure_context_client(SSL_CTX *ctx, EVP_PKEY *publicKey, EVP_PKEY *priva
 }
 
 /* takes in hostname:port */
-void configure_context_server(SSL_CTX *ctx, char *host) {
+int configure_context_server(SSL_CTX *ctx, EVP_PKEY *privateKey, char *host) {
     /* make sure to verify server's certificate */
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, 0);
+    // SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, 0);
 
     /* remove port from hostname */
     char *port_ptr = host;
@@ -262,14 +302,25 @@ void configure_context_server(SSL_CTX *ctx, char *host) {
     }
     *port_ptr = '\0'; // null terminate host
     
-    X509_VERIFY_PARAM *vpm = SSL_CTX_get0_param(ctx);
-    X509_VERIFY_PARAM_set1_host(vpm, host, 0);
+    // X509_VERIFY_PARAM *vpm = SSL_CTX_get0_param(ctx);
+    // X509_VERIFY_PARAM_set1_host(vpm, host, 0);
 
     /* restore host w/ port */
     *port_ptr = ':';
 
-    if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 ) {
+    if (SSL_CTX_use_PrivateKey(ctx, privateKey) <= 0 ) {
         ERR_print_errors_fp(stderr);
-        exit(EXIT_FAILURE);
+        return -1;
     }
+
+
+    /* verify using the OS's trusted CAs*/
+    /*
+    if (!SSL_CTX_set_default_verify_paths(ctx)) {
+        ERR_print_errors_fp(stderr);
+        return -1;
+    }
+    */
+
+    return 0;
 }

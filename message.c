@@ -1,8 +1,11 @@
+#define _GNU_SOURCE
 #include "message.h"
 #include <stdlib.h>
 #include <unistd.h> 
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
+#include <openssl/err.h>
 
 #define INITIAL_BUFFER_SIZE 1024
 
@@ -17,35 +20,91 @@ void create_Message(Message *message) {
 // -1: errors in reading
 //  0: success in reading
 //  1: more to reading
+//  2: tunnel mode should be turned on for client and server
 /* TODO: may want to add support for sending partial messages immediately after reading */
-int add_to_Message(Message *message, int sd) {
+int add_to_Message(Message *message, int sd, ConnectionType *ct) {
+    if (ct->isHTTPs) {
+        // printf("ssl read on socket %d\n", sd);
+    }
     char *currIndex = message->buffer + message->bytes_read;
     if (message->header_read) {
         int bytes_to_read = message->total_length - message->bytes_read;
-        ssize_t read_bytes = read(sd, currIndex, bytes_to_read);
+        /* if ssl connection, use ssl read*/
+        ssize_t read_bytes;
+        if (ct->isHTTPs) {
+            read_bytes = SSL_read(ct->ssl, currIndex, bytes_to_read);
+        } else {
+            read_bytes = read(sd, currIndex, bytes_to_read);
+        }
+
         if (read_bytes <= 0) {
+            if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_READ) {
+                return 1;
+            }
+            if (ct->isHTTPs) {
+                printf("ssl read failed on socket %d\n", sd);
+            }
+            printf("read bytes: %d\n", (int) read_bytes);
+            printf("SSL error code: %d\n", SSL_get_error(ct->ssl, read_bytes));
+            if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_ZERO_RETURN) {
+                printf("TLS connection closed gracefully\n");
+            } 
+            // printf("errno: %d\n", errno);
+            int err;
+            while ((err = ERR_get_error()) != 0) {
+                fprintf(stderr, "SSL error: %s\n", ERR_error_string(err, NULL));
+            }
             return -1;
         }
 
         message->bytes_read += read_bytes;
+        message->buffer[message->bytes_read] = '\0';
         if (message->bytes_read == message->total_length) {
             printf("message from socket %d is as follows:\n", sd);
             fwrite(message->buffer, 1, 20, stdout);
             printf("\n");
         }
+        /* if in tunnel mode, will just send it blindly */
+        if (ct->isTunnel) { return 2; }
+
         return (message->bytes_read == message->total_length) ? 0 : 1;
     } else {
         // read in until end of buffer
-        ssize_t read_bytes = read(sd, currIndex, message->buffer_size - message->bytes_read);
+        ssize_t read_bytes;
+        if (ct->isHTTPs) {
+            read_bytes = SSL_read(ct->ssl, currIndex, message->buffer_size - message->bytes_read);
+        } else {
+            read_bytes = read(sd, currIndex, message->buffer_size - message->bytes_read);
+        }
+        printf("read bytes: %d\n", (int) read_bytes);
         /* return -1 to signify error reading */
         if (read_bytes <= 0) {
+            if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_READ) {
+                return 1;
+            }
+            if (ct->isHTTPs) {
+                printf("ssl read failed on socket %d\n", sd);
+            }
+            printf("SSL error code: %d\n", SSL_get_error(ct->ssl, read_bytes));
+            if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_ZERO_RETURN) {
+                printf("TLS connection closed gracefully\n");
+            }
+            printf("errno: %d\n", errno);
+            int err;
+            while ((err = ERR_get_error()) != 0) {
+                fprintf(stderr, "SSL error: %s\n", ERR_error_string(err, NULL));
+            }
+
             return -1;
         }
         message->bytes_read += read_bytes;
         if (message->bytes_read == message->buffer_size) {
+            printf("expanding buffer\n");
             expand_buffer(message);
         }
         message->buffer[message->bytes_read] = '\0';
+        /* if in tunnel mode, will just send it blindly */
+        if (ct->isTunnel) { return 2; }
         // check if header is fully read
         return check_message(message, sd);
     }
@@ -54,10 +113,11 @@ int add_to_Message(Message *message, int sd) {
 int check_message(Message *message, int sd) {
     char *endOfResponse = strstr(message->buffer, "\r\n\r\n");
     if (endOfResponse != NULL) {
+        printf("header read\n");
         message->header_read = true;
         int headerSize = endOfResponse + 4 - message->buffer;
         message->total_length = headerSize;
-        if (strstr(message->buffer, "GET") != NULL) {
+        if (strstr(message->buffer, "GET") != NULL || strstr(message->buffer, "CONNECT") != NULL) {
             if (message->bytes_read >= message->total_length) {
                 printf("message from socket %d is as follows:\n", sd);
                 fwrite(message->buffer, 1, 20, stdout);
@@ -66,20 +126,26 @@ int check_message(Message *message, int sd) {
             return 0;
         } 
         // find the content-length field
-        char *contentLenIndex = strstr(message->buffer, "Content-Length: ");
+        char *contentLenIndex = strcasestr(message->buffer, "Content-Length: ");
         if (contentLenIndex == NULL) {
-            if (message->bytes_read >= message->total_length) {
-                printf("message from socket %d is as follows:\n", sd);
-                fwrite(message->buffer, 1, 20, stdout);
-                printf("\n");
+            if (strcasestr(message->buffer, "Transfer-Encoding: chunked")) {
+                printf("chunked data incoming!\n");
             }
-            return 0; // assume no content length field means no message body
-        } else {
-            contentLenIndex += strlen("Content-Length: ");
+            printf("no content length or chunked transfer encoding ");
+            fwrite(message->buffer, 1, 20, stdout);
+            /* no content-length and no transfer-encoding means body length is determined 
+                by bytes sent until server closes connection*/
+            /* turn on tunnel mode */
+            return 2;
+        } else {            
+            contentLenIndex += strlen("Content-Length:");
+            while (*contentLenIndex == ' ' || *contentLenIndex == '\t') {
+                contentLenIndex++;
+            }
             int contentLength = atoi(contentLenIndex);
             message->total_length = contentLength + headerSize;
             if (message->buffer_size < message->total_length + 1) {
-                char *new_buffer = (char *) malloc(message->total_length);
+                char *new_buffer = (char *) malloc(message->total_length + 1);
                 memcpy(new_buffer, message->buffer, message->buffer_size);
                 free(message->buffer);
                 message->buffer_size = message->total_length;
