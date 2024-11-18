@@ -338,6 +338,8 @@ int main(int argc, char* argv[])
                                 FD_SET(serverSD, &write_fd_set);
                                 clientToServer[i] = serverSD;
                                 serverToClient[serverSD] = i;
+                                connectionTypes[serverSD].isHTTPs = false;
+                                connectionTypes[serverSD].isTunnel = false;
                             }
                         } else {
                             /* TODO: would it make sense to just forward the message here but not cache the result? */
@@ -566,8 +568,6 @@ int main(int argc, char* argv[])
                             printf("setting client socket %d and server socket %d to tunnel mode\n", clientSD, i);
                             connectionTypes[clientSD].isTunnel = true;
                             connectionTypes[i].isTunnel = true;
-                        
-                            
                         } else if (read_result == 0) {
                             // cache only if entire response has been received
                             /* TODO: should we test for best max age value or is there a good default? */
@@ -619,6 +619,8 @@ int main(int argc, char* argv[])
                                     }
                                 } else {
                                     int serverSD = get_server_socket(partialMessages[clientSD].buffer);
+                                    connectionTypes[serverSD].isHTTPs = false;
+                                    connectionTypes[serverSD].isTunnel = false;
                                     fdMax = fdMax > serverSD ? fdMax : serverSD + 1;
 
                                     /* update data structures */
@@ -688,6 +690,19 @@ int main(int argc, char* argv[])
                     if (ssl_server == NULL) {
                         printf("creating server ssl failed\n");
                     }
+
+                    SSL_CTX_free(ctx_server);
+
+                    /* set ssl server name */
+                    char *port_ptr = identifiers[i];
+                    while(*port_ptr != ':') {
+                        port_ptr++;
+                    }
+                    *port_ptr = '\0'; // null terminate host
+                    SSL_set_tlsext_host_name(ssl_server, identifiers[i]);
+
+                    /* restore host w/ port */
+                    *port_ptr = ':';
                     SSL_set_fd(ssl_server, i);
                     connectionTypes[i].ssl = ssl_server;
                     SSL_set_connect_state(ssl_server);
@@ -722,6 +737,7 @@ int main(int argc, char* argv[])
                     configure_context_client(ctx_client, publicKey, privateKey, identifiers[i]); 
                     SSL *ssl_client;
                     ssl_client = SSL_new(ctx_client);
+                    SSL_CTX_free(ctx_client);
                     SSL_set_fd(ssl_client, clientSD);
                     connectionTypes[clientSD].ssl = ssl_client;
                     SSL_set_accept_state(ssl_client);
