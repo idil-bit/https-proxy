@@ -62,7 +62,6 @@ int get_server_socket(char *message) {
     /* connect: create a connection with the server */
     /* TODO: check for timeout to see if connect request failed */
     connect(serverSD, (struct sockaddr *)&serveraddr, sizeof(serveraddr));
-    printf("sending connect request to server at socket %d\n", serverSD);
     
     return serverSD;
 }

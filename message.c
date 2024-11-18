@@ -38,17 +38,20 @@ int add_to_Message(Message *message, int sd, ConnectionType *ct) {
         }
 
         if (read_bytes <= 0) {
-            if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_READ) {
-                return 1;
+            if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_READ || 
+                SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_WRITE ||
+                errno == EINPROGRESS || errno == 0) {
+                return 3; /* don't want to treat it as a successful read like return 1 but also don't want to return -1 or 0 */
             }
             if (ct->isHTTPs) {
+                if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_ZERO_RETURN) {
+                    // printf("TLS connection closed gracefully\n");
+                    return -1;
+                } 
                 printf("ssl read failed on socket %d\n", sd);
+                printf("read bytes: %d\n", (int) read_bytes);
+                printf("SSL error code: %d\n", SSL_get_error(ct->ssl, read_bytes));
             }
-            printf("read bytes: %d\n", (int) read_bytes);
-            printf("SSL error code: %d\n", SSL_get_error(ct->ssl, read_bytes));
-            if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_ZERO_RETURN) {
-                printf("TLS connection closed gracefully\n");
-            } 
             // printf("errno: %d\n", errno);
             int err;
             while ((err = ERR_get_error()) != 0) {
@@ -59,11 +62,6 @@ int add_to_Message(Message *message, int sd, ConnectionType *ct) {
 
         message->bytes_read += read_bytes;
         message->buffer[message->bytes_read] = '\0';
-        if (message->bytes_read == message->total_length) {
-            printf("message from socket %d is as follows:\n", sd);
-            fwrite(message->buffer, 1, 20, stdout);
-            printf("\n");
-        }
         /* if in tunnel mode, will just send it blindly */
         if (ct->isTunnel) { return 2; }
 
@@ -76,30 +74,31 @@ int add_to_Message(Message *message, int sd, ConnectionType *ct) {
         } else {
             read_bytes = read(sd, currIndex, message->buffer_size - message->bytes_read);
         }
-        printf("read bytes: %d\n", (int) read_bytes);
         /* return -1 to signify error reading */
         if (read_bytes <= 0) {
-            if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_READ) {
-                return 1;
+            if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_READ || 
+                SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_WRITE || 
+                errno == EINPROGRESS || errno == 0) {
+                return 3;
             }
             if (ct->isHTTPs) {
+                if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_ZERO_RETURN) {
+                    // printf("TLS connection closed gracefully\n");
+                    return -1;
+                }
                 printf("ssl read failed on socket %d\n", sd);
-            }
-            printf("SSL error code: %d\n", SSL_get_error(ct->ssl, read_bytes));
-            if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_ZERO_RETURN) {
-                printf("TLS connection closed gracefully\n");
-            }
-            printf("errno: %d\n", errno);
-            int err;
-            while ((err = ERR_get_error()) != 0) {
-                fprintf(stderr, "SSL error: %s\n", ERR_error_string(err, NULL));
+                printf("SSL error code: %d\n", SSL_get_error(ct->ssl, read_bytes));
+                printf("errno: %d\n", errno);
+                int err;
+                while ((err = ERR_get_error()) != 0) {
+                    fprintf(stderr, "SSL error: %s\n", ERR_error_string(err, NULL));
+                }
             }
 
             return -1;
         }
         message->bytes_read += read_bytes;
         if (message->bytes_read == message->buffer_size) {
-            printf("expanding buffer\n");
             expand_buffer(message);
         }
         message->buffer[message->bytes_read] = '\0';
@@ -113,16 +112,11 @@ int add_to_Message(Message *message, int sd, ConnectionType *ct) {
 int check_message(Message *message, int sd) {
     char *endOfResponse = strstr(message->buffer, "\r\n\r\n");
     if (endOfResponse != NULL) {
-        printf("header read\n");
         message->header_read = true;
         int headerSize = endOfResponse + 4 - message->buffer;
         message->total_length = headerSize;
-        if (strstr(message->buffer, "GET") != NULL || strstr(message->buffer, "CONNECT") != NULL) {
-            if (message->bytes_read >= message->total_length) {
-                printf("message from socket %d is as follows:\n", sd);
-                fwrite(message->buffer, 1, 20, stdout);
-                printf("\n");
-            }
+        /* use memcmp to make sure GET or CONNECT is at start of message */
+        if (memcmp(message->buffer, "GET", 3) == 0 || memcmp(message->buffer, "CONNECT", 7) == 0) {
             return 0;
         } 
         // find the content-length field
@@ -130,9 +124,9 @@ int check_message(Message *message, int sd) {
         if (contentLenIndex == NULL) {
             if (strcasestr(message->buffer, "Transfer-Encoding: chunked")) {
                 printf("chunked data incoming!\n");
+            } else {
+                printf("no content length or chunked transfer encoding ");
             }
-            printf("no content length or chunked transfer encoding ");
-            fwrite(message->buffer, 1, 20, stdout);
             /* no content-length and no transfer-encoding means body length is determined 
                 by bytes sent until server closes connection*/
             /* turn on tunnel mode */
@@ -150,11 +144,6 @@ int check_message(Message *message, int sd) {
                 free(message->buffer);
                 message->buffer_size = message->total_length;
                 message->buffer = new_buffer;
-            }
-            if (message->bytes_read >= message->total_length) {
-                printf("message from socket %d is as follows:\n", sd);
-                fwrite(message->buffer, 1, 20, stdout);
-                printf("\n");
             }
             return (message->bytes_read >= message->total_length) ? 0 : 1;
         }
@@ -183,7 +172,7 @@ int update_Message(Message *message) {
         return 1;
     } else {
         int curr_length = message->bytes_read - message->total_length;
-        int buffer_size = curr_length > INITIAL_BUFFER_SIZE ? curr_length : INITIAL_BUFFER_SIZE;
+        int buffer_size = curr_length >= INITIAL_BUFFER_SIZE ? curr_length + 1 : INITIAL_BUFFER_SIZE;
         char *new_buffer = (char *)malloc(buffer_size);
         printf("message->total_length: %d\n", message->total_length);
         printf("message->bytes read: %d\n", message->bytes_read);
@@ -195,6 +184,8 @@ int update_Message(Message *message) {
         message->buffer_size = buffer_size;
         message->bytes_read = curr_length;
         message->header_read = false;
+
+        message->buffer[message->bytes_read] = '\0';
 
         return check_message(message, 0);
     }

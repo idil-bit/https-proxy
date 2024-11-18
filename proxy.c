@@ -30,6 +30,48 @@ Message partialMessages[FD_SETSIZE];
 char *identifiers[FD_SETSIZE]; // mapping of serverSD to cache identifiers
 EVP_PKEY *publicKey;
 EVP_PKEY *privateKey;
+fd_set clients_set, servers_set; // holds client and server sockets
+fd_set ssl_handshakes; // holds sockets in the middle of ssl handshakes
+fd_set read_fd_set, read_fd_set_copy, write_fd_set, write_fd_set_copy;
+int clientToServer[FD_SETSIZE]; // for each clientSD, the serverSD they talk to
+int serverToClient[FD_SETSIZE]; // for each serverSD, the clientSD they talk to
+ConnectionType connectionTypes[FD_SETSIZE];
+
+void close_client(int clientSD) {
+    if (clientSD == -1) {
+        return;
+    }
+    if (connectionTypes[clientSD].isHTTPs && connectionTypes[clientSD].ssl != NULL) {
+        SSL_shutdown(connectionTypes[clientSD].ssl);
+        SSL_free(connectionTypes[clientSD].ssl);
+        connectionTypes[clientSD].ssl = NULL;
+    }
+    close(clientSD);
+    FD_CLR(clientSD, &read_fd_set);
+    FD_CLR(clientSD, &read_fd_set_copy);
+    FD_CLR(clientSD, &clients_set);
+    FD_CLR(clientSD, &ssl_handshakes);
+    clientToServer[clientSD] = -1;
+}
+
+void close_server(int serverSD) {
+    if (serverSD == -1) {
+        return;
+    }
+    if (connectionTypes[serverSD].isHTTPs && connectionTypes[serverSD].ssl != NULL) {
+        SSL_shutdown(connectionTypes[serverSD].ssl);
+        SSL_free(connectionTypes[serverSD].ssl);
+        connectionTypes[serverSD].ssl = NULL;
+    }
+    close(serverSD);
+    FD_CLR(serverSD, &read_fd_set);
+    FD_CLR(serverSD, &read_fd_set_copy);
+    FD_CLR(serverSD, &clients_set);
+    FD_CLR(serverSD, &ssl_handshakes);
+    FD_CLR(serverSD, &write_fd_set);
+    FD_CLR(serverSD, &write_fd_set_copy);
+    serverToClient[serverSD] = -1;
+}
 
 void signal_handler(int signal) {
     (void) signal;
@@ -81,8 +123,6 @@ int main(int argc, char* argv[])
     cache = Cache_new(CACHE_SIZE);
 
     ConnectionType connectionTypes[FD_SETSIZE];
-    int clientToServer[FD_SETSIZE]; // for each clientSD, the serverSD they talk to
-    int serverToClient[FD_SETSIZE]; // for each serverSD, the clientSD they talk to
     for (int i = 0; i < FD_SETSIZE; i++) {
         connectionTypes[i].isHTTPs = false;
         partialMessages[i].buffer = NULL;
@@ -90,18 +130,16 @@ int main(int argc, char* argv[])
         serverToClient[i] = -1;
     }
     
-    fd_set clients_set, servers_set; // holds client and server sockets
+    
     FD_ZERO(&clients_set);
     FD_ZERO(&servers_set);
 
-    fd_set ssl_handshakes; // holds sockets in the middle of ssl handshakes
     FD_ZERO(&ssl_handshakes);
 
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     signal(SIGPIPE, SIG_IGN); // allows writing to a closed socket without crashing program
 
-    fd_set read_fd_set, read_fd_set_copy, write_fd_set, write_fd_set_copy;
     FD_ZERO(&read_fd_set);
     FD_ZERO(&write_fd_set);
     FD_SET(proxySD, &read_fd_set);
@@ -152,6 +190,12 @@ int main(int argc, char* argv[])
                     if (clientSD == -1) {
                         continue;
                     }
+
+                    int flags = fcntl(clientSD, F_GETFL, 0);
+                    flags = flags | O_NONBLOCK;
+                    if (fcntl(clientSD, F_SETFL, flags) < 0) {
+                        perror("fcntl(F_SETFL)");
+                    }
                     fdMax = fdMax > clientSD ? fdMax : clientSD + 1;
 
                     FD_SET(clientSD, &read_fd_set);
@@ -176,13 +220,9 @@ int main(int argc, char* argv[])
                         int ssl_accept_res = SSL_accept(connectionTypes[i].ssl);
                         if (ssl_accept_res != 1) {
                             if (SSL_get_error(connectionTypes[i].ssl, ssl_accept_res) != SSL_ERROR_WANT_READ) {
-                                close(i);
-                                FD_CLR(i, &clients_set);
-                                FD_CLR(i, &read_fd_set);
-                                FD_CLR(i, &ssl_handshakes);
-                                clientToServer[i] = -1;
+                                close_server(clientToServer[i]);
+                                close_client(i);
                             }
-                            printf("waiting for read on ssl accept from client\n");
                         } else {
                             /* if result was 1, socket is now ready for reading messages */
                             printf("successful ssl accept from client\n");
@@ -193,19 +233,30 @@ int main(int argc, char* argv[])
                     if (connectionTypes[i].isTunnel) {
                         serverSD = clientToServer[i];
                         int bytes_read;
+                        int bytes_written;
                         if ((connectionTypes[i].isHTTPs) && !tunnelMode) {
                             do {
                                 bytes_read = SSL_read(connectionTypes[i].ssl, buffer, BUFFER_SIZE);
                                 // immediately tunnel data to server
                                 if (bytes_read > 0) 
-                                    SSL_write(connectionTypes[serverSD].ssl, buffer, bytes_read);
-                            } while (bytes_read > 0 && SSL_pending(connectionTypes[i].ssl) > 0);
+                                    bytes_written = SSL_write(connectionTypes[serverSD].ssl, buffer, bytes_read);
+                            } while (bytes_written > 0 && bytes_read > 0 && SSL_pending(connectionTypes[i].ssl) > 0);
+                            if (bytes_written < 0 ||
+                                (bytes_read < 0 && SSL_get_error(connectionTypes[i].ssl, bytes_read) != SSL_ERROR_WANT_READ)) {
+                                /* close client socket and close server socket */
+                                close_server(serverSD);
+                                close_client(i);
+                            }
                         } else {
                             /* read into buffer and send immediately */
                             bytes_read = read(i, buffer, BUFFER_SIZE);
                             // immediately tunnel data to server
                             if (bytes_read > 0) 
                                 write(serverSD, buffer, bytes_read);
+                            else {
+                                close_server(serverSD);
+                                close_client(i);
+                            }
                         }
                         continue;
                     }
@@ -214,7 +265,6 @@ int main(int argc, char* argv[])
                     /* check for pending data in underlying ssl object */
                     if (read_result == 1 && connectionTypes[i].isHTTPs) {
                         while (SSL_pending(connectionTypes[i].ssl)) {
-                            printf("found pending\n");
                             read_result = add_to_Message(&(partialMessages[i]), i, &(connectionTypes[i]));
                             if (read_result != 1) {
                                 break;
@@ -226,9 +276,7 @@ int main(int argc, char* argv[])
                             // printf("connect received!: \n%s\n", partialMessages[i].buffer);
                             int serverSD = get_server_socket(partialMessages[i].buffer);
                             if (serverSD == -1) {
-                                close(i);
-                                FD_CLR(i, &read_fd_set);
-                                FD_CLR(i, &clients_set);
+                                close_client(i);
                                 continue;
                             }
                             fdMax = fdMax > serverSD ? fdMax : serverSD + 1;
@@ -248,6 +296,12 @@ int main(int argc, char* argv[])
                             connectionTypes[i].isHTTPs = true;
                             connectionTypes[serverSD].isHTTPs = true;
 
+                            /* no ssl connection yet */
+                            if (connectionTypes[serverSD].ssl != NULL) {
+                                SSL_free(connectionTypes[serverSD].ssl);
+                                connectionTypes[serverSD].ssl = NULL;
+                            }
+
                             if (identifiers[serverSD] != NULL) {
                                 free(identifiers[serverSD]);
                                 identifiers[serverSD] = NULL;
@@ -258,12 +312,15 @@ int main(int argc, char* argv[])
                             // check if response is already cached
                             char *identifier = get_identifier(partialMessages[i].buffer);
                             Cached_item cached_response = Cache_get(cache, identifier);
+                            /* for debugging: avoid serving from cache */
+                            cached_response = NULL;
                             free(identifier);
                             if (cached_response != NULL) {		
                                 // printf("hit cache! max age = %d\n", cached_response->max_age);		
                                 // TODO: write w/ ssl if i is a https connection	
                                 int write_result;
                                 if (connectionTypes[i].isHTTPs) {
+                                    /* TODO: SSL write may fail with large values - maybe check if we should break this up into smaller chunks*/
                                     write_result = SSL_write(connectionTypes[i].ssl, cached_response->value, cached_response->value_size);
                                 } else {
                                     write_result = write(i, cached_response->value, cached_response->value_size);
@@ -271,57 +328,31 @@ int main(int argc, char* argv[])
                                 if (write_result == -1) {
                                     // remove client
                                     printf("writing to client failed - removing socket %d from client and read set\n", i);
-                                    close(i);
-                                    // printf("closing socket %d line 165\n", i);
-                                    FD_CLR(i, &clients_set);
-                                    FD_CLR(i, &read_fd_set);	
-                                    free(partialMessages[i].buffer);
-                                    partialMessages[i].buffer = NULL;
-                                    clientToServer[i] = -1;
+                                    close_client(i);
                                 }
                             } else if (connectionTypes[i].isHTTPs) {
                                 // printf("read GET message from https client\n");
                                 /* ssl connection to server is already established */
                                 int serverSD = clientToServer[i];
                                 /* TODO: check if serverSD = -1*/
-                                SSL *serverSSL = connectionTypes[clientToServer[i]].ssl;
-                                if (serverSSL == NULL) {
-                                    /* close connection to client */
-                                    close(i);
-                                    FD_CLR(i, &clients_set);
-                                    FD_CLR(i, &read_fd_set);	
-                                    free(partialMessages[i].buffer);
-                                    partialMessages[i].buffer = NULL;
-                                    clientToServer[i] = -1;
-                                    continue;
-                                } 
                                 if (!FD_ISSET(serverSD, &ssl_handshakes)) {
                                     // printf("sending request to server at socket %d\n", serverSD);
                                 }
                                 if (!FD_ISSET(serverSD, &ssl_handshakes) && 
-                                    SSL_write(serverSSL, partialMessages[i].buffer, partialMessages[i].total_length) <= 0) {
+                                    SSL_write(connectionTypes[serverSD].ssl, partialMessages[i].buffer, partialMessages[i].total_length) <= 0) {
                                     /* we have to wait for the ssl handshake w/ the server to complete before sending the request */
-                                    printf("ssl write failed line 247\n");
+                                    printf("ssl write of GET message to server failed line 247\n");
                                     /* error occured - close client and server sockets */
-                                    close(i);
-                                    FD_CLR(i, &clients_set);
-                                    FD_CLR(i, &read_fd_set);
-                                    serverSD = clientToServer[i];
-                                    close(serverSD);
-                                    FD_CLR(serverSD, &servers_set);
-                                    FD_CLR(serverSD, &read_fd_set);
-                                    FD_CLR(serverSD, &read_fd_set_copy);
+                                    close_server(serverSD);
+                                    close_client(i);
+                                    continue;
                                 }
                                 
                             } else { /* invariant: partialMessages[i].buffer != NULL */
                                 /* check if -1 and handle accordingly */
                                 serverSD = get_server_socket(partialMessages[i].buffer);
                                 if (serverSD == -1) {
-                                    close(i);
-                                    free(partialMessages[i].buffer);
-                                    partialMessages[i].buffer = NULL;
-                                    FD_CLR(i, &clients_set);
-                                    FD_CLR(i, &read_fd_set);
+                                    close_client(i);
                                     continue;
                                 }
                                 fdMax = fdMax > serverSD ? fdMax : serverSD + 1;
@@ -333,7 +364,6 @@ int main(int argc, char* argv[])
                                 identifiers[serverSD] = get_identifier(partialMessages[i].buffer);
 
                                 /* update data structures */
-                                printf("adding server socket %d to server and write set\n", serverSD);
                                 FD_SET(serverSD, &servers_set);
                                 FD_SET(serverSD, &write_fd_set);
                                 clientToServer[i] = serverSD;
@@ -343,20 +373,13 @@ int main(int argc, char* argv[])
                             }
                         } else {
                             /* TODO: would it make sense to just forward the message here but not cache the result? */
-                            printf("unsupported request type\n");
                             if (connectionTypes[i].isHTTPs) {
                                 serverSD = clientToServer[i];
                                 if (!FD_ISSET(serverSD, &ssl_handshakes) &&
                                     SSL_write(connectionTypes[serverSD].ssl, partialMessages[i].buffer, partialMessages[i].total_length) <= 0) {
                                     /* close client and server connections */
-                                    close(i);
-                                    FD_CLR(i, &clients_set);
-                                    FD_CLR(i, &read_fd_set);
-                                    FD_CLR(i, &read_fd_set_copy);
-                                    close(serverSD);
-                                    FD_CLR(serverSD, &servers_set);
-                                    FD_CLR(serverSD, &read_fd_set);
-                                    FD_CLR(serverSD, &write_fd_set);
+                                    close_client(i);
+                                    close_server(serverSD);
                                     continue;
                                 }
                             }
@@ -365,21 +388,9 @@ int main(int argc, char* argv[])
                         
                     } else if (read_result == -1) {
                         // remove client and corresponding server 
-                        serverSD = clientToServer[i];
-                        if (serverSD != -1) {
-                            close(serverSD);
-                            FD_CLR(serverSD, &servers_set);
-                            FD_CLR(serverSD, &read_fd_set);
-                            FD_CLR(serverSD, &read_fd_set_copy);
-                            FD_CLR(serverSD, &write_fd_set);
-                            FD_CLR(serverSD, &write_fd_set_copy);
-                            serverToClient[serverSD] = -1;
-                        }
-                        close(i);
-                        printf("closing socket %d line 189\n", i);
-                        FD_CLR(i, &clients_set);
-                        FD_CLR(i, &read_fd_set);
-                        clientToServer[i] = -1;
+                        close_server(clientToServer[i]);
+                        close_client(i); 
+                        continue;      
                     } else if (read_result == 2) {
                         connectionTypes[i].isTunnel = true;
                         
@@ -391,32 +402,21 @@ int main(int argc, char* argv[])
                             if (!FD_ISSET(serverSD, &ssl_handshakes) &&
                                 SSL_write(connectionTypes[serverSD].ssl, partialMessages[i].buffer, partialMessages[i].bytes_read) <= 0) {
                                 /* close client and server connections */
-                                close(i);
-                                FD_CLR(i, &clients_set);
-                                FD_CLR(i, &read_fd_set);
-                                FD_CLR(i, &read_fd_set_copy);
-                                close(serverSD);
-                                FD_CLR(serverSD, &servers_set);
-                                FD_CLR(serverSD, &read_fd_set);
-                                FD_CLR(serverSD, &write_fd_set);
+                                close_client(i);
+                                close_server(serverSD);
                                 continue;
                             }
                         } else {
                             /* wait for server to expect writes for http req */
                             serverSD = get_server_socket(partialMessages[i].buffer);
                             if (serverSD == -1) {
-                                close(i);
-                                free(partialMessages[i].buffer);
-                                partialMessages[i].buffer = NULL;
-                                FD_CLR(i, &clients_set);
-                                FD_CLR(i, &read_fd_set);
+                                close_client(i);
                                 continue;
                             }
                             connectionTypes[serverSD].isTunnel = true;
                             fdMax = fdMax > serverSD ? fdMax : serverSD + 1;
 
                             /* update data structures */
-                            printf("adding server socket %d to server and write set\n", serverSD);
                             FD_SET(serverSD, &servers_set);
                             FD_SET(serverSD, &write_fd_set);
                             clientToServer[i] = serverSD;
@@ -430,40 +430,28 @@ int main(int argc, char* argv[])
                         if (ssl_connect_res != 1) {
                             if (SSL_get_error(connectionTypes[i].ssl, ssl_connect_res) != SSL_ERROR_WANT_READ) {
                                 printf("ssl connect failed on socket %d\n", i);
-                                close(i);
-                                FD_CLR(i, &servers_set);
-                                FD_CLR(i, &read_fd_set);
-                                FD_CLR(i, &ssl_handshakes);
-                                clientToServer[i] = -1;
+                                close_server(i);
+                                close_client(clientSD);
                                 continue;
                             } else {
-                                printf("waiting for read for ssl server handshake on socket %d\n", i);
                                 continue;
                             }
                         } else {
                             /* if result was 1, socket is now ready for reading messages */
-                            printf("ssl server handshake succeeded\n");
                             FD_CLR(i, &ssl_handshakes);
                             /* check if there is a message from the client that is ready to be sent */
-                            int clientSD = serverToClient[i];
+                            clientSD = serverToClient[i];
                             int write_result = 1;
                             if (partialMessages[clientSD].total_length > 0 &&
                                 partialMessages[clientSD].bytes_read >= partialMessages[clientSD].total_length) {
-                                printf("sending request to ssl server on socket %d\n", i);
                                 write_result = SSL_write(connectionTypes[i].ssl, partialMessages[clientSD].buffer, partialMessages[clientSD].total_length);
                             } else if (connectionTypes[clientSD].isTunnel) {
                                 write_result = SSL_write(connectionTypes[i].ssl, partialMessages[clientSD].buffer, partialMessages[clientSD].bytes_read);
                             }
                             if (write_result <= 0) {
                                 /* close client and server connections */
-                                close(clientSD);
-                                FD_CLR(clientSD, &clients_set);
-                                FD_CLR(clientSD, &read_fd_set);
-                                FD_CLR(clientSD, &read_fd_set_copy);
-                                close(i);
-                                FD_CLR(i, &servers_set);
-                                FD_CLR(i, &read_fd_set);
-                                FD_CLR(i, &write_fd_set);
+                                close_client(clientSD);
+                                close_server(i);
                                 continue;
                             }
                         }
@@ -475,35 +463,40 @@ int main(int argc, char* argv[])
                     // if corresponding client has closed the connection
                     if (clientToServer[clientSD] == -1) {
                         // close this connection and remove from sets
-                        printf("corresponding client connection was closed - removing server socket %d from server, write, and read set\n", i);
-                        close(i);
-                        printf("closing socket %d line 204\n", i);
-                        FD_CLR(i, &servers_set);
-                        FD_CLR(i, &write_fd_set);
-                        FD_CLR(i, &read_fd_set);
-                        serverToClient[i] = -1;
-                        free(partialMessages[i].buffer);
-                        partialMessages[i].buffer = NULL;
+                        close_server(i);
                         continue;
                     }
 
                     if (connectionTypes[i].isTunnel) {
                         clientSD = serverToClient[i];
                         int bytes_read;
+                        int bytes_written;
                         if ((connectionTypes[i].isHTTPs) && !tunnelMode) {
                             do {
                                 bytes_read = SSL_read(connectionTypes[i].ssl, buffer, BUFFER_SIZE);
-                                // immediately tunnel data to server
+                                // immediately tunnel data to client
                                 if (bytes_read > 0) 
-                                    SSL_write(connectionTypes[clientSD].ssl, buffer, bytes_read);
-                            } while (bytes_read > 0 && SSL_pending(connectionTypes[i].ssl) > 0);
+                                    bytes_written = SSL_write(connectionTypes[clientSD].ssl, buffer, bytes_read);
+                            } while (bytes_written > 0 && bytes_read > 0 && SSL_pending(connectionTypes[i].ssl) > 0);
+                            /* if bytes read is less than 0, check to see if error code is not ssl_want_read */
+                            if (bytes_written < 0 ||
+                                (bytes_read < 0 && SSL_get_error(connectionTypes[i].ssl, bytes_read) != SSL_ERROR_WANT_READ)) {
+                                /* close client socket and close server socket */
+                                close_server(i);
+                                close_client(clientSD);
+                            }
                         } else {
                             /* read into buffer and send immediately */
                             bytes_read = read(i, buffer, BUFFER_SIZE);
                             // immediately tunnel data to server
-                            if (bytes_read > 0) 
+                            if (bytes_read > 0) {
                                 write(clientSD, buffer, bytes_read);
+                            } else {
+                                close_server(i);
+                                close_client(clientSD);
+                            }
                         }
+                        
                         continue;
                     }
                     
@@ -517,7 +510,6 @@ int main(int argc, char* argv[])
                     /* check for pending data in underlying ssl struct */
                     if (read_result == 1 && connectionTypes[i].isHTTPs) {
                         while (SSL_pending(connectionTypes[i].ssl)) {
-                            printf("found pending\n");
                             read_result = add_to_Message(&(partialMessages[i]), i, &(connectionTypes[i]));
                             if (read_result != 1) {
                                 break;
@@ -525,19 +517,11 @@ int main(int argc, char* argv[])
                         }
                     }
                     // if response is fully read, then cache it and move up any extra data
-                    if (read_result == -1) {
+                    if (read_result == -1) { /* error reading response */
                         // close connection
-                        close(i);
-                        printf("closing socket %d line 223\n", i);
-                        FD_CLR(i, &servers_set);
-                        FD_CLR(i, &write_fd_set);
-                        FD_CLR(i, &read_fd_set);
-                        free(identifiers[i]); /* free server hostname */
-                        identifiers[i] = NULL;
-                        printf("read failed - cleared %d from server", i);
-                        serverToClient[i] = -1;
-                        free(partialMessages[i].buffer);
-                        partialMessages[i].buffer = NULL;
+                        close_server(i);
+                        close_client(clientSD);
+                        continue;
                     } else if (partialMessages[i].bytes_read != old_bytes_read) {
                         // send chunk we just read in (from old bytes read to current bytes read)
                         int write_result;
@@ -550,29 +534,18 @@ int main(int argc, char* argv[])
                         }
                         if (write_result <= 0) {
                             printf("writing to client failed\n");
-                            close(i);
-                            printf("closing socket %d line 238\n", i);
-                            FD_CLR(i, &servers_set);
-                            FD_CLR(i, &read_fd_set);
-                            FD_CLR(i, &write_fd_set);
-                            serverToClient[i] = -1;
-                            close(clientSD);
-                            printf("closing socket %d line 243\n", clientSD);
-                            FD_CLR(clientSD, &clients_set);
-                            FD_CLR(clientSD, &read_fd_set);
-                            clientToServer[clientSD] = -1;
+                            close_server(i);
+                            close_client(clientSD);
+                            continue;
                         }
                         if (read_result == 2) {
                             /* turn on tunnel mode for client and server */
-                            printf("read response from server w/ no content length - turning on tunnel mode\n");
-                            printf("setting client socket %d and server socket %d to tunnel mode\n", clientSD, i);
                             connectionTypes[clientSD].isTunnel = true;
                             connectionTypes[i].isTunnel = true;
                         } else if (read_result == 0) {
                             // cache only if entire response has been received
                             /* TODO: should we test for best max age value or is there a good default? */
                             /* there should only be one response in the buffer */
-                            printf("response receieved from socket %d to socket %d\n", i, clientSD);
                             Cache_put(cache, 
                                       identifiers[i], 
                                       partialMessages[i].buffer, 
@@ -584,7 +557,6 @@ int main(int argc, char* argv[])
                                 printf("%s", partialMessages[i].buffer);
                             }
 
-                            printf("clearing response\n");
                             free(partialMessages[i].buffer);
                             partialMessages[i].buffer = NULL;
                             create_Message(&partialMessages[i]);
@@ -607,14 +579,9 @@ int main(int argc, char* argv[])
                                     /* forward message to server */
                                     if (SSL_write(connectionTypes[i].ssl, partialMessages[clientSD].buffer, partialMessages[clientSD].total_length) == -1) {
                                         /* close client and server connections */
-                                        close(clientSD);
-                                        FD_CLR(clientSD, &clients_set);
-                                        FD_CLR(clientSD, &read_fd_set);
-                                        FD_CLR(clientSD, &read_fd_set_copy);
-                                        close(i);
-                                        FD_CLR(i, &servers_set);
-                                        FD_CLR(i, &read_fd_set);
-                                        FD_CLR(i, &write_fd_set);
+                                        printf("sending request to server at socket %d failed\n", i);
+                                        close_client(clientSD);
+                                        close_server(i);
                                         continue;
                                     }
                                 } else {
@@ -626,7 +593,6 @@ int main(int argc, char* argv[])
                                     /* update data structures */
                                     FD_SET(serverSD, &servers_set);
                                     FD_SET(serverSD, &write_fd_set);
-                                    printf("socket %d added to servers\n", serverSD);
                                     clientToServer[clientSD] = serverSD;
                                     serverToClient[serverSD] = clientSD;
                                 }
@@ -644,8 +610,7 @@ int main(int argc, char* argv[])
                 /* connect was successful - don't need to check if socket is open for writing anymore */
                 FD_CLR(i, &write_fd_set);
                 FD_SET(i, &read_fd_set);
-                printf("connection to socket %d was successful - added to read and cleared from write\n", i);
-
+                
                 /* make sure there is no old server response */
                 if (partialMessages[i].buffer != NULL) {
                     free(partialMessages[i].buffer);
@@ -659,21 +624,9 @@ int main(int argc, char* argv[])
                     update_Message(&partialMessages[clientSD]);
                     const char *response = "HTTP/1.1 200 Connection Established\r\n\r\n";
                     if (write(clientSD, response, strlen(response)) == -1) {
-                        close(clientSD);
-                        /* TODO: remove client from all DSs */
-                        connectionTypes[clientSD].isHTTPs = false;
-                        connectionTypes[i].isHTTPs = false;
-                        /* clear client and server from fd sets */
-                        close(clientSD);
-                        printf("closing socket %d line 292\n", clientSD);
-                        FD_CLR(clientSD, &read_fd_set);
-                        FD_CLR(clientSD, &clients_set);
-                        FD_CLR(clientSD, &read_fd_set_copy);
-                        close(i);
-                        printf("closing socket %d line 296\n", i);
-                        FD_CLR(i, &servers_set);
-                        FD_CLR(i, &read_fd_set);
-                        FD_CLR(i, &write_fd_set);
+                        printf("writing connection established message to client failed\n");
+                        close_client(clientSD);
+                        close_server(i);
                         continue;
                     }
                     
@@ -711,21 +664,13 @@ int main(int argc, char* argv[])
                     if (ssl_connect_res != 1) {
                         if (SSL_get_error(ssl_server, ssl_connect_res) == SSL_ERROR_WANT_READ) {
                             /* ssl handshake needs to wait for server to send more data */
-                            printf("waiting for read on ssl connect to server for socket %d\n", i);
                             FD_SET(i, &ssl_handshakes);
                         } else {
                             printf("ssl connect to server failed on socket %d\n", i);
                             ERR_print_errors_fp(stderr);
                             /* TODO: should we make fd sets global and then we could just make a function to remove a client/server? */
-                            close(i);
-                            FD_CLR(i, &servers_set);
-                            FD_CLR(i, &read_fd_set);
-                            serverToClient[i] = -1;
-                            close(clientSD);
-                            FD_CLR(clientSD, &clients_set);
-                            FD_CLR(clientSD, &read_fd_set);
-                            FD_CLR(clientSD, &read_fd_set_copy);
-                            clientToServer[clientSD] = -1;
+                            close_server(i);
+                            close_client(clientSD);
                             continue;
                         } 
                     } else {
@@ -746,7 +691,6 @@ int main(int argc, char* argv[])
                     if (ssl_accept_res != 1) {
                         if (SSL_get_error(ssl_client, ssl_accept_res) == SSL_ERROR_WANT_READ) {
                             /* ssl handshake needs to wait for client to send more data */
-                            printf("waiting for read on ssl accept from client\n");
                             FD_SET(clientSD, &ssl_handshakes);
                         } else {
                             printf("ssl accept failed\n");
@@ -758,15 +702,9 @@ int main(int argc, char* argv[])
                             while ((err = ERR_get_error()) != 0) {
                                 fprintf(stderr, "SSL error: %s\n", ERR_error_string(err, NULL));
                             }
-                            close(i);
-                            FD_CLR(i, &servers_set);
-                            FD_CLR(i, &read_fd_set);
-                            serverToClient[i] = -1;
-                            close(clientSD);
-                            FD_CLR(clientSD, &clients_set);
-                            FD_CLR(clientSD, &read_fd_set);
-                            FD_CLR(clientSD, &read_fd_set_copy);
-                            clientToServer[clientSD] = -1;
+                            close_server(i);
+                            close_client(clientSD);
+                            continue;
                         }
                        
                     } else {
@@ -774,12 +712,10 @@ int main(int argc, char* argv[])
                     }
 
                 } else {
-                    printf("writing message of length %d to server\n", partialMessages[clientSD].total_length);
                     if (write(i, partialMessages[clientSD].buffer, partialMessages[clientSD].total_length) == -1) { 
-                        close(i); 
-                        printf("closing socket %d line 325\n", i);
-                        FD_CLR(i, &read_fd_set);
-                        FD_CLR(i, &servers_set);
+                        printf("writing message to server failed\n");
+                        close_server(i);
+                        close_client(clientSD);
                     }
                 }
 
