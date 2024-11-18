@@ -40,7 +40,7 @@ int add_to_Message(Message *message, int sd, ConnectionType *ct) {
         if (read_bytes <= 0) {
             if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_READ || 
                 SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_WRITE ||
-                errno == EINPROGRESS || errno == 0) {
+                errno == EINPROGRESS || errno == 0 || errno == 35) {
                 return 3; /* don't want to treat it as a successful read like return 1 but also don't want to return -1 or 0 */
             }
             if (ct->isHTTPs) {
@@ -78,7 +78,7 @@ int add_to_Message(Message *message, int sd, ConnectionType *ct) {
         if (read_bytes <= 0) {
             if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_READ || 
                 SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_WRITE || 
-                errno == EINPROGRESS || errno == 0) {
+                errno == EINPROGRESS || errno == 0 || errno == 35) { /* error code of 35 means read would have blocket */
                 return 3;
             }
             if (ct->isHTTPs) {
@@ -125,7 +125,7 @@ int check_message(Message *message, int sd) {
             if (strcasestr(message->buffer, "Transfer-Encoding: chunked")) {
                 printf("chunked data incoming!\n");
             } else {
-                printf("no content length or chunked transfer encoding ");
+                printf("no content length or chunked transfer encoding\n");
             }
             /* no content-length and no transfer-encoding means body length is determined 
                 by bytes sent until server closes connection*/
