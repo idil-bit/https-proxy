@@ -92,6 +92,7 @@ void signal_handler(int signal) {
     exit(EXIT_FAILURE);
 }
 
+/* TODO: if read fails due to needing a write, add it to write set. Check write set first - if it needs a read then  just add to write_fd_set_copy */
 int main(int argc, char* argv[])
 {
     if ((argc != 3) && (argc != 2)) { return -1; }
@@ -208,7 +209,7 @@ int main(int argc, char* argv[])
                     /* not yet an https connection as we have not received a CONNECT message */
                     connectionTypes[clientSD].isHTTPs = false;
                     connectionTypes[clientSD].isTunnel = false;
-                    if (connectionTypes[clientSD].ssl == NULL) {
+                    if (connectionTypes[clientSD].ssl != NULL) {
                         SSL_free(connectionTypes[clientSD].ssl);
                         connectionTypes[clientSD].ssl = NULL;
                     }
