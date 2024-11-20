@@ -137,6 +137,9 @@ int check_message(Message *message, int sd) {
                 contentLenIndex++;
             }
             int contentLength = atoi(contentLenIndex);
+            if (contentLength > 5000000) {
+                return 2; /* don't cache anything larger than 5 MB*/
+            }
             message->total_length = contentLength + headerSize;
             if (message->buffer_size < message->total_length + 1) {
                 char *new_buffer = (char *) malloc(message->total_length + 1);

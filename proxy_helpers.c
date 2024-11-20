@@ -14,6 +14,7 @@
 #include <openssl/ossl_typ.h>
 #include <ctype.h>
 #include <openssl/rand.h>
+#include <arpa/inet.h>
 
 // -1 if error
 // otherwise socket descriptor for the server
@@ -27,22 +28,25 @@ int get_server_socket(char *message) {
     port_ptr ++;
     int port = atoi(port_ptr);
 
-    struct hostent *server = gethostbyname(host);
-    if (server == NULL) {
-        fprintf(stderr,"ERROR, no such host as %s\n", host);
-        free(host);
-        return -1;
+    /* build the server's Internet address */
+    struct sockaddr_in serveraddr;
+    memset(&serveraddr, 0, sizeof(serveraddr)); 
+    serveraddr.sin_family = AF_INET;
+    serveraddr.sin_port = htons(port);
+
+    if (inet_pton(AF_INET, host, &serveraddr.sin_addr) <= 0) {
+        // Not an IP address, resolve hostname
+        struct hostent *server = gethostbyname(host);
+        if (server == NULL) {
+            fprintf(stderr, "ERROR: No such host as %s\n", host);
+            free(host);
+            return -1;
+        }
+
+        memcpy(&serveraddr.sin_addr.s_addr, server->h_addr, server->h_length);
     }
 
     free(host);
-
-    /* build the server's Internet address */
-    struct sockaddr_in serveraddr;
-    serveraddr.sin_family = AF_INET;
-    memcpy((char *)&serveraddr.sin_addr.s_addr,
-           (char *)server->h_addr,  
-           server->h_length);
-    serveraddr.sin_port = htons(port);
 
     /* create the socket */
     int serverSD = socket(AF_INET, SOCK_STREAM, 0);
@@ -207,7 +211,13 @@ X509 *generate_x509(EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host)
     // The format is "DNS:hostname", for example, "DNS:example.com"
     /* TODO: may want to check if host is ip and not dns */
     char san_value[strlen(host) + 5]; // + 5 for "DNS:" and null terminator
-    snprintf(san_value, sizeof(san_value), "DNS:%s", host);
+
+    struct in_addr ipv4_addr;
+    if (inet_pton(AF_INET, host, &ipv4_addr) == 1) {
+        snprintf(san_value, sizeof(san_value), "IP:%s", host);
+    } else {
+        snprintf(san_value, sizeof(san_value), "DNS:%s", host);
+    }
 
     /* restore identifier w/ port */
     *port_ptr = ':';

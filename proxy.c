@@ -22,7 +22,7 @@
 
 /* TODO: test with different cache sizes for optimization */
 #define CACHE_SIZE 10
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 10000
 
 int proxySD;
 Cache cache;
@@ -38,9 +38,11 @@ int serverToClient[FD_SETSIZE]; // for each serverSD, the clientSD they talk to
 ConnectionType connectionTypes[FD_SETSIZE];
 
 void close_client(int clientSD) {
+    printf("closing client %d\n", clientSD);
     if (clientSD == -1) {
         return;
     }
+    connectionTypes[clientSD].isHTTPs = false;
     if (connectionTypes[clientSD].isHTTPs && connectionTypes[clientSD].ssl != NULL) {
         SSL_shutdown(connectionTypes[clientSD].ssl);
         SSL_free(connectionTypes[clientSD].ssl);
@@ -55,9 +57,11 @@ void close_client(int clientSD) {
 }
 
 void close_server(int serverSD) {
+    printf("closing server %d\n", serverSD);
     if (serverSD == -1) {
         return;
     }
+    connectionTypes[serverSD].isHTTPs = false;
     if (connectionTypes[serverSD].isHTTPs && connectionTypes[serverSD].ssl != NULL) {
         SSL_shutdown(connectionTypes[serverSD].ssl);
         SSL_free(connectionTypes[serverSD].ssl);
@@ -136,6 +140,7 @@ int main(int argc, char* argv[])
     ConnectionType connectionTypes[FD_SETSIZE];
     for (int i = 0; i < FD_SETSIZE; i++) {
         connectionTypes[i].isHTTPs = false;
+        connectionTypes[i].ssl = NULL;
         partialMessages[i].buffer = NULL;
         clientToServer[i] = -1;
         serverToClient[i] = -1;
@@ -235,15 +240,21 @@ int main(int argc, char* argv[])
                         serverSD = clientToServer[i];
                         int bytes_read;
                         int bytes_written;
+                        int bytes_to_read = BUFFER_SIZE;
                         if ((connectionTypes[i].isHTTPs) && !tunnelMode) {
                             do {
-                                bytes_read = SSL_read(connectionTypes[i].ssl, buffer, BUFFER_SIZE);
+                                if (bytes_to_read > BUFFER_SIZE) {
+                                    bytes_to_read = BUFFER_SIZE;
+                                }
+                                bytes_read = SSL_read(connectionTypes[i].ssl, buffer, bytes_to_read);
                                 // immediately tunnel data to server
                                 if (bytes_read > 0) 
                                     bytes_written = SSL_write(connectionTypes[serverSD].ssl, buffer, bytes_read);
-                            } while (bytes_written > 0 && bytes_read > 0 && SSL_pending(connectionTypes[i].ssl) > 0);
-                            if (bytes_written < 0 ||
-                                (bytes_read < 0 && SSL_get_error(connectionTypes[i].ssl, bytes_read) != SSL_ERROR_WANT_READ)) {
+                            } while (bytes_written > 0 && bytes_read > 0 && 
+                                        (bytes_to_read = SSL_pending(connectionTypes[i].ssl)) > 0);
+                            if (bytes_written <= 0 ||
+                                (bytes_read <= 0 && SSL_get_error(connectionTypes[i].ssl, bytes_read) != SSL_ERROR_WANT_READ &&
+                                    errno != EWOULDBLOCK)) {
                                 /* close client socket and close server socket */
                                 close_server(serverSD);
                                 close_client(i);
@@ -266,6 +277,7 @@ int main(int argc, char* argv[])
                     /* check for pending data in underlying ssl object */
                     if (read_result == 1 && connectionTypes[i].isHTTPs) {
                         while (SSL_pending(connectionTypes[i].ssl)) {
+                            printf("found pending\n");
                             read_result = add_to_Message(&(partialMessages[i]), i, &(connectionTypes[i]));
                             if (read_result != 1) {
                                 break;
@@ -461,7 +473,7 @@ int main(int argc, char* argv[])
                     if (FD_ISSET(i, &ssl_handshakes)) {
                         int ssl_connect_res = SSL_connect(connectionTypes[i].ssl);
                         if (ssl_connect_res != 1) {
-                            if (SSL_get_error(connectionTypes[i].ssl, ssl_connect_res) != SSL_ERROR_WANT_READ) {
+                            if (SSL_get_error(connectionTypes[i].ssl, ssl_connect_res) != SSL_ERROR_WANT_READ && errno != EWOULDBLOCK) {
                                 printf("ssl connect failed on socket %d\n", i);
                                 close_server(i);
                                 close_client(clientSD);
@@ -513,11 +525,14 @@ int main(int argc, char* argv[])
                                     bytes_written = SSL_write(connectionTypes[clientSD].ssl, buffer, bytes_read);
                                     if (printMode) 
                                         fwrite(buffer, 1, bytes_read, stdout);
+                                    if (bytes_written <= 0) {
+                                        printf("error writing to client\n");
+                                    }
                                 }
                             } while (bytes_written > 0 && bytes_read > 0 && SSL_pending(connectionTypes[i].ssl) > 0);
                             /* if bytes read is less than 0, check to see if error code is not ssl_want_read */
-                            if (bytes_written < 0 ||
-                                (bytes_read < 0 && SSL_get_error(connectionTypes[i].ssl, bytes_read) != SSL_ERROR_WANT_READ)) {
+                            if (bytes_written <= 0 ||
+                                (bytes_read <= 0 && SSL_get_error(connectionTypes[i].ssl, bytes_read) != SSL_ERROR_WANT_READ && errno != EWOULDBLOCK)) {
                                 /* close client socket and close server socket */
                                 close_server(i);
                                 close_client(clientSD);
@@ -620,11 +635,11 @@ int main(int argc, char* argv[])
                             // cache only if entire response has been received
                             /* TODO: should we test for best max age value or is there a good default? */
                             /* there should only be one response in the buffer */
-                            Cache_put(cache, 
+                            /*Cache_put(cache, 
                                       identifiers[i], 
                                       partialMessages[i].buffer, 
                                       partialMessages[i].total_length, 
-                                      get_max_age(partialMessages[i].buffer));
+                                      get_max_age(partialMessages[i].buffer));*/
                             if (partialMessages[i].bytes_read != partialMessages[i].total_length) {
                                 printf("unexpected read of more than one response\n");
                                 printf("partialMessages[i].bytes_read: %d, partialMessages[i].total_length: %d\n", partialMessages[i].bytes_read, partialMessages[i].total_length);
@@ -707,7 +722,7 @@ int main(int argc, char* argv[])
                     if (connectionTypes[i].isTunnel)
                         continue;
                     /* create ssl object for server */
-                    SSL_CTX *ctx_server = create_context(TLS_client_method()); // proxy is acting as client
+                    SSL_CTX *ctx_server = create_context(TLS_method()); // proxy is acting as client
                     if (ctx_server == NULL) {
                         printf("creating server context failed\n");
                     }
@@ -752,7 +767,7 @@ int main(int argc, char* argv[])
                     }
 
                     /* create ssl object for client */
-                    SSL_CTX *ctx_client = create_context(TLS_server_method()); // proxy is acting as server
+                    SSL_CTX *ctx_client = create_context(TLS_method()); // proxy is acting as server
                     configure_context_client(ctx_client, publicKey, privateKey, identifiers[i]); 
                     SSL *ssl_client;
                     ssl_client = SSL_new(ctx_client);
