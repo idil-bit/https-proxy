@@ -217,7 +217,7 @@ int main(int argc, char* argv[])
                     if (FD_ISSET(i, &ssl_handshakes)) {
                         int ssl_accept_res = SSL_accept(connectionTypes[i].ssl);
                         if (ssl_accept_res != 1) {
-                            if (SSL_get_error(connectionTypes[i].ssl, ssl_accept_res) != SSL_ERROR_WANT_READ) {
+                            if (SSL_get_error(connectionTypes[i].ssl, ssl_accept_res) != SSL_ERROR_WANT_READ && errno != EWOULDBLOCK) {
                                 printf("ssl accept failed\n");
                                 printf("SSL error code: %d\n", SSL_get_error(connectionTypes[i].ssl, ssl_accept_res));
                                 printf("errno: %d\n", errno);
@@ -478,7 +478,7 @@ int main(int argc, char* argv[])
                             if (partialMessages[clientSD].total_length > 0 &&
                                 partialMessages[clientSD].bytes_read >= partialMessages[clientSD].total_length) {
                                 write_result = SSL_write(connectionTypes[i].ssl, partialMessages[clientSD].buffer, partialMessages[clientSD].total_length);
-                            } else if (connectionTypes[clientSD].isTunnel) {
+                            } else if (connectionTypes[clientSD].isTunnel && partialMessages[clientSD].bytes_read > 0) {
                                 write_result = SSL_write(connectionTypes[i].ssl, partialMessages[clientSD].buffer, partialMessages[clientSD].bytes_read);
                             }
                             if (write_result <= 0) {
@@ -763,7 +763,7 @@ int main(int argc, char* argv[])
 
                     int ssl_accept_res = SSL_accept(ssl_client);
                     if (ssl_accept_res != 1) {
-                        if (SSL_get_error(ssl_client, ssl_accept_res) == SSL_ERROR_WANT_READ) {
+                        if (SSL_get_error(ssl_client, ssl_accept_res) == SSL_ERROR_WANT_READ || errno == EWOULDBLOCK) {
                             /* ssl handshake needs to wait for client to send more data */
                             FD_SET(clientSD, &ssl_handshakes);
                         } else {
