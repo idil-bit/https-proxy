@@ -21,9 +21,17 @@ void create_Message(Message *message) {
 //  0: success in reading
 //  1: more to reading
 //  2: tunnel mode should be turned on for client and server
+//  3: nonfatal error
+//  4: blocking waiting for write - proxy should add socket to write set
 /* TODO: may want to add support for sending partial messages immediately after reading */
 int add_to_Message(Message *message, int sd, ConnectionType *ct) {
-    if (ct->isHTTPs) {
+    if (message->buffer == NULL) {
+        create_Message(message);
+    }
+    if (!ct->isTunnel && ct->isHTTPs && ct->ssl == NULL) {
+        /* proxy is reading from the client before it is setting up connection to server */
+        /* solution: temporarily remove client from read set */
+        printf("error https socket w/ null ssl on socket %d\n", sd);
         // printf("ssl read on socket %d\n", sd);
     }
     char *currIndex = message->buffer + message->bytes_read;
@@ -38,9 +46,13 @@ int add_to_Message(Message *message, int sd, ConnectionType *ct) {
         }
 
         if (read_bytes <= 0) {
-            if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_READ || 
+            if (ct->ssl != NULL && SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_WRITE) {
+                printf("read blocked waiting for write\n");
+                return 4;
+            }
+            if (ct->ssl != NULL && (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_READ || 
                 SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_WRITE ||
-                errno == EINPROGRESS || errno == 0 || errno == 35) {
+                errno == EINPROGRESS || errno == 0 || errno == 35 )) {
                 return 3; /* don't want to treat it as a successful read like return 1 but also don't want to return -1 or 0 */
             }
             if (ct->isHTTPs) {
@@ -76,9 +88,13 @@ int add_to_Message(Message *message, int sd, ConnectionType *ct) {
         }
         /* return -1 to signify error reading */
         if (read_bytes <= 0) {
-            if (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_READ || 
+            if (ct->ssl != NULL && SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_WRITE) {
+                printf("read blocked waiting for write\n");
+                return 4;
+            }
+            if (ct->ssl != NULL && (SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_READ || 
                 SSL_get_error(ct->ssl, read_bytes) == SSL_ERROR_WANT_WRITE || 
-                errno == EINPROGRESS || errno == 0 || errno == 35) { /* error code of 35 means read would have blocket */
+                errno == EINPROGRESS || errno == 0 || errno == 35)) { /* error code of 35 means read would have blocket */
                 return 3;
             }
             if (ct->isHTTPs) {
