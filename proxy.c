@@ -37,6 +37,21 @@ int clientToServer[FD_SETSIZE]; // for each clientSD, the serverSD they talk to
 int serverToClient[FD_SETSIZE]; // for each serverSD, the clientSD they talk to
 ConnectionType connectionTypes[FD_SETSIZE];
 
+// TODO: DELETE AFTER DEMO FOR CHECKPOINT 1
+// void replaceCharacter(char* str, char target, char replacement, int size) {
+//     if (!str) {
+//         return;
+//     }
+    
+//     char* ptr = str;
+//     for (int i = 0; i < size; i++) {
+//         if (*ptr == target) {
+//             *ptr = replacement;
+//         }
+//         ++ptr;
+//     }
+// }
+
 void close_client(int clientSD) {
     printf("closing client %d\n", clientSD);
     if (clientSD == -1) {
@@ -234,7 +249,7 @@ int main(int argc, char* argv[])
                             continue;
                         }
                         /* create ssl object for server */
-                        SSL_CTX *ctx_server = create_context(TLS_method()); // proxy is acting as client
+                        SSL_CTX *ctx_server = create_context(TLS_client_method()); // proxy is acting as client
                         if (ctx_server == NULL) {
                             printf("creating server context failed\n");
                         }
@@ -283,7 +298,7 @@ int main(int argc, char* argv[])
                         }
 
                         /* create ssl object for client */
-                        SSL_CTX *ctx_client = create_context(TLS_method()); // proxy is acting as server
+                        SSL_CTX *ctx_client = create_context(TLS_server_method()); // proxy is acting as server
                         configure_context_client(ctx_client, publicKey, privateKey, identifiers[i]); 
                         SSL *ssl_client;
                         ssl_client = SSL_new(ctx_client);
@@ -705,11 +720,50 @@ int main(int argc, char* argv[])
                                 bytes_read = SSL_read(connectionTypes[i].ssl, buffer, BUFFER_SIZE);
                                 // immediately tunnel data to client
                                 if (bytes_read > 0) {
+                                    // replaceCharacter(buffer, 'e', 'a', bytes_read);
                                     bytes_written = SSL_write(connectionTypes[clientSD].ssl, buffer, bytes_read);
                                     if (printMode) 
                                         fwrite(buffer, 1, bytes_read, stdout);
                                     if (bytes_written <= 0) {
                                         printf("error writing to client\n");
+                                        if (SSL_get_error(connectionTypes[clientSD].ssl, bytes_written) == SSL_ERROR_WANT_WRITE || errno == 35) {
+                                            printf("write to client %d blocked\n", clientSD);
+                                            struct timeval *timeout;
+                                            timeout = malloc(sizeof(*timeout));
+                                            timeout->tv_sec = 0;
+                                            timeout->tv_usec = 500000;
+
+                                            fd_set solo_fd_set;
+                                            FD_ZERO(&solo_fd_set);
+                                            FD_SET(clientSD, &solo_fd_set);
+                                            
+                                            if (select (clientSD + 1, NULL, &solo_fd_set, NULL, timeout) < 0)
+                                            {
+                                                perror ("select");
+                                                exit (EXIT_FAILURE);
+                                            }
+                                            if (FD_ISSET(clientSD, &solo_fd_set)) {
+                                                bytes_written = SSL_write(connectionTypes[clientSD].ssl, buffer, bytes_read);
+                                                if (bytes_written< 0) {
+                                                    printf("write failed again\n");
+                                                    close_client(clientSD);
+                                                    close_server(i);
+                                                    continue;
+                                                } else {
+                                                    printf("write to client was successful after retry\n");
+                                                    continue;
+                                                }
+                                            } else {
+                                                printf("write still blocking for write to client\n");
+                                                close_client(clientSD);
+                                                close_server(i);
+                                                continue;
+                                            }
+                                        } else {
+                                            close_client(clientSD);
+                                            close_server(i);
+                                        }
+                                        
                                     }
                                 }
                             } while (bytes_written > 0 && bytes_read > 0 && SSL_pending(connectionTypes[i].ssl) > 0);
@@ -764,6 +818,7 @@ int main(int argc, char* argv[])
                         // send chunk we just read in (from old bytes read to current bytes read)
                         int write_result;
                         if (connectionTypes[i].isHTTPs) {
+                            // replaceCharacter(partialMessages[i].buffer + old_bytes_read, 'e', 'a', partialMessages[i].bytes_read - old_bytes_read);
                             write_result = SSL_write(connectionTypes[clientSD].ssl, partialMessages[i].buffer + old_bytes_read, 
                                 partialMessages[i].bytes_read - old_bytes_read);
                             if (printMode)
