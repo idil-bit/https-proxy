@@ -430,9 +430,15 @@ int main(int argc, char* argv[])
                             /* read into buffer and send immediately */
                             bytes_read = read(i, buffer, BUFFER_SIZE);
                             // immediately tunnel data to server
-                            if (bytes_read > 0) 
-                                write(serverSD, buffer, bytes_read);
-                            else {
+                            if (bytes_read > 0) {
+                                if (write(serverSD, buffer, bytes_read) < 0) {
+                                    printf("writing to server %d failed\n", serverSD);
+                                }
+                            }
+                                
+                            else if (errno != EINPROGRESS && errno != EWOULDBLOCK) {
+                                printf("reading from client %d failed\n", i);
+                                printf("errno: %d\n", errno);
                                 close_server(serverSD);
                                 close_client(i);
                             }
@@ -730,35 +736,45 @@ int main(int argc, char* argv[])
                                             printf("write to client %d blocked\n", clientSD);
                                             struct timeval *timeout;
                                             timeout = malloc(sizeof(*timeout));
-                                            timeout->tv_sec = 0;
-                                            timeout->tv_usec = 500000;
+                                            timeout->tv_sec = 1;
+                                            timeout->tv_usec = 0;
 
-                                            fd_set solo_fd_set;
-                                            FD_ZERO(&solo_fd_set);
-                                            FD_SET(clientSD, &solo_fd_set);
+                                            fd_set solo_write_fd_set;
+                                            FD_ZERO(&solo_write_fd_set);
+                                            fd_set solo_read_fd_set;
+                                            FD_ZERO(&solo_read_fd_set);
+                                            if (SSL_get_error(connectionTypes[clientSD].ssl, bytes_written) == SSL_ERROR_WANT_WRITE) {
+                                                FD_SET(clientSD, &solo_write_fd_set);
+                                            } else {
+                                                FD_SET(clientSD, &solo_read_fd_set);
+                                            }
                                             
-                                            if (select (clientSD + 1, NULL, &solo_fd_set, NULL, timeout) < 0)
+                                            if (select (clientSD + 1, &solo_read_fd_set, &solo_write_fd_set, NULL, timeout) < 0)
                                             {
                                                 perror ("select");
                                                 exit (EXIT_FAILURE);
                                             }
+                                            bytes_written = SSL_write(connectionTypes[clientSD].ssl, buffer, bytes_read);
+                                            if (bytes_written < 0) {
+                                                printf("write failed again\n");
+                                                printf("errno:%d\n", errno);
+                                                close_client(clientSD);
+                                                close_server(i);
+                                                continue;
+                                            } else {
+                                                printf("write to client was successful after retry\n");
+                                                continue;
+                                            }
+                                            /*
                                             if (FD_ISSET(clientSD, &solo_fd_set)) {
-                                                bytes_written = SSL_write(connectionTypes[clientSD].ssl, buffer, bytes_read);
-                                                if (bytes_written< 0) {
-                                                    printf("write failed again\n");
-                                                    close_client(clientSD);
-                                                    close_server(i);
-                                                    continue;
-                                                } else {
-                                                    printf("write to client was successful after retry\n");
-                                                    continue;
-                                                }
+                                                
                                             } else {
                                                 printf("write still blocking for write to client\n");
                                                 close_client(clientSD);
                                                 close_server(i);
                                                 continue;
                                             }
+                                            */
                                         } else {
                                             close_client(clientSD);
                                             close_server(i);
@@ -779,8 +795,13 @@ int main(int argc, char* argv[])
                             bytes_read = read(i, buffer, BUFFER_SIZE);
                             // immediately tunnel data to server
                             if (bytes_read > 0) {
-                                write(clientSD, buffer, bytes_read);
+                                if (write(clientSD, buffer, bytes_read) < 0) {
+                                    printf("writing to client %d failed\n", clientSD);
+                                    printf("errno: %d\n", errno);
+                                }
                             } else {
+                                printf("reading from server %d failed\n", i);
+                                printf("errno: %d\n", errno);
                                 close_server(i);
                                 close_client(clientSD);
                             }
@@ -834,18 +855,32 @@ int main(int argc, char* argv[])
                                 /* make fd set containing only the client and use select w/ timeout val of 500ms to wait for it to write */
                                 struct timeval *timeout;
                                 timeout = malloc(sizeof(*timeout));
-                                timeout->tv_sec = 0;
-                                timeout->tv_usec = 500000;
+                                timeout->tv_sec = 1;
+                                timeout->tv_usec = 0;
 
-                                fd_set solo_fd_set;
-                                FD_ZERO(&solo_fd_set);
-                                FD_SET(clientSD, &solo_fd_set);
+                                fd_set solo_write_fd_set;
+                                FD_ZERO(&solo_write_fd_set);
+                                fd_set solo_read_fd_set;
+                                FD_ZERO(&solo_read_fd_set);
+                                if (SSL_get_error(connectionTypes[clientSD].ssl, write_result) == SSL_ERROR_WANT_WRITE) {
+                                    FD_SET(clientSD, &solo_write_fd_set);
+                                } else {
+                                    FD_SET(clientSD, &solo_read_fd_set);
+                                }
                                 
-                                if (select (clientSD + 1, NULL, &solo_fd_set, NULL, timeout) < 0)
+                                if (select (clientSD + 1, &solo_read_fd_set, &solo_write_fd_set, NULL, timeout) < 0)
                                 {
                                     perror ("select");
                                     exit (EXIT_FAILURE);
                                 }
+                                if (SSL_write(connectionTypes[clientSD].ssl, partialMessages[i].buffer + old_bytes_read, 
+                                            partialMessages[i].bytes_read - old_bytes_read) < 0) {
+                                    printf("write failed again\n");
+                                    close_server(i);
+                                    close_client(clientSD);
+                                    continue;
+                                }
+                                /*
                                 if (FD_ISSET(clientSD, &solo_fd_set)) {
                                     if (SSL_write(connectionTypes[clientSD].ssl, partialMessages[i].buffer + old_bytes_read, 
                                                 partialMessages[i].bytes_read - old_bytes_read) < 0) {
@@ -860,6 +895,7 @@ int main(int argc, char* argv[])
                                     close_client(clientSD);
                                     continue;
                                 }
+                                */
 
                             } else {
                                 printf("errno: %d\n", errno);
@@ -876,6 +912,7 @@ int main(int argc, char* argv[])
                             // cache only if entire response has been received
                             /* TODO: should we test for best max age value or is there a good default? */
                             /* there should only be one response in the buffer */
+                            printf("read entire response from %s\n", identifiers[i]);
                             /*Cache_put(cache, 
                                       identifiers[i], 
                                       partialMessages[i].buffer, 
