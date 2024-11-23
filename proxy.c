@@ -510,9 +510,10 @@ int main(int argc, char* argv[])
 
                         } else if (strstr(partialMessages[i].buffer, "GET") != NULL) {
                             // check if response is already cached
-                            printf("read get request\n");
+                            printf("read get request line 513\n");
                             printf("%s", partialMessages[i].buffer);
                             char *identifier = get_identifier(partialMessages[i].buffer);
+                            printf("identifier = %s\n", identifier);
 
                             /* check if this is a wikipedia get request to use our llm on */
                             if (llmMode && strstr(identifier, "wikipedia.org") != NULL && strstr(identifier, "wiki/") != NULL
@@ -525,11 +526,11 @@ int main(int argc, char* argv[])
                                     close_client(i);
                                     continue;
                                 }
-                                if (partialMessages[serverSD].buffer == NULL) {
+                                if (partialMessages[serverSD].buffer != NULL) {
                                     free(partialMessages[serverSD].buffer);
-                                    create_Message(&partialMessages[serverSD]);
-                                    partialMessages[serverSD].use_llm = true;
                                 }
+                                create_Message(&partialMessages[serverSD]);
+                                partialMessages[serverSD].use_llm = true;
                                 
                                 /* tells the server to send the full, unencoded response */
                                 remove_header(&partialMessages[i], "Accept-Encoding");
@@ -958,7 +959,7 @@ int main(int argc, char* argv[])
                                 char *summary = "This is a summary of the page.\n";
                                 make_llm_enhanced_response(&partialMessages[i], summary, strlen(summary));
                                 printf("llm enhanced response:\n");
-                                printf("%s", partialMessages[i].buffer);
+                                //printf("%s", partialMessages[i].buffer);
 
                                 int clientSD = serverToClient[i];
                                 int write_result;

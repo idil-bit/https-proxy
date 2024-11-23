@@ -115,7 +115,7 @@ int add_to_Message(Message *message, int sd, ConnectionType *ct) {
             return -1;
         }
         message->bytes_read += read_bytes;
-        if (message->bytes_read < 0 || message->bytes_read > 5000000) { /* if size is too big just tunnel data */
+        if (!message->use_llm && (message->bytes_read < 0 || message->bytes_read > 5000000)) { /* if size is too big just tunnel data */
             return 2;
         }
         if (message->bytes_read == message->buffer_size) {
@@ -159,6 +159,7 @@ int check_message(Message *message, int sd) {
             }
             int contentLength = atoi(contentLenIndex);
             if ((contentLength < 0) || (contentLength > 5000000)) {
+                printf("contentLength is too large\n");
                 return 2; /* don't cache anything larger than 5 MB*/
             }
             message->total_length = contentLength + headerSize;
