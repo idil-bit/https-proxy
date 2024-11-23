@@ -15,6 +15,7 @@ void create_Message(Message *message) {
     message->bytes_read = 0;
     message->header_read = false;
     message->total_length = 0;
+    message->use_llm = false;
 }
 
 // -1: errors in reading
@@ -145,6 +146,7 @@ int check_message(Message *message, int sd) {
                 printf("chunked data incoming!\n");
             } else {
                 printf("no content length or chunked transfer encoding\n");
+                printf("%s", message->buffer);
             }
             /* no content-length and no transfer-encoding means body length is determined 
                 by bytes sent until server closes connection*/
@@ -206,9 +208,82 @@ int update_Message(Message *message) {
         message->buffer_size = buffer_size;
         message->bytes_read = curr_length;
         message->header_read = false;
+        message->use_llm = false;
 
         message->buffer[message->bytes_read] = '\0';
 
         return check_message(message, 0);
     }
+}
+
+void remove_header(Message *message, char *header) {
+    char *header_start = strcasestr(message->buffer, header);
+    if (header_start != NULL) {
+        char *header_end = strstr(header_start, "\r\n");
+        header_end += 2;
+        int new_length = message->total_length - (header_end - header_start);
+        message->bytes_read -= (header_end - header_start);
+        char *new_message = malloc(new_length + 1);
+        /* copy over start of message until the start of the accept-encoding header */
+        memcpy(new_message, message->buffer, header_start - message->buffer);
+
+        /* copy over end of message after the end of the accept-encoding header */
+        memcpy(new_message + (header_start - message->buffer), header_end, message->total_length - (header_end - message->buffer));
+        new_message[new_length] = '\0';
+        free(message->buffer);
+        message->buffer = new_message;
+        message->total_length = new_length;
+    }
+}
+
+int make_llm_enhanced_response(Message *message, char *summary, int summary_size) {
+
+    char *page_start = "Wikipedia, the free encyclopedia</div>";
+    char *summary_start = strstr(message->buffer, page_start);
+    if (summary_start == NULL) {
+        return -1;
+    } 
+    summary_start += (strlen(page_start) + 1); /* + 1 for newline */
+    int first_part_length = summary_start - message->buffer;
+    int last_part_length = message->total_length - first_part_length;
+
+    char *new_message = malloc(message->total_length + strlen(SUMMARY_START) + strlen(SUMMARY_END) + strlen(summary) + 5); // + 5 in case content length increases
+
+    char *content_length_start = strcasestr(message->buffer, "Content-Length:");
+    content_length_start += strlen("Content-Length:");
+    while (*content_length_start == ' ' || *content_length_start == '\t') {
+        content_length_start++;
+    }
+    int contentLength = atoi(content_length_start);
+    int new_length = contentLength + strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END);
+
+    size_t prefix_len = content_length_start - message->buffer;
+    memcpy(new_message, message->buffer, prefix_len);
+
+    // Append the new "Content-Length" value
+    int bytes_written = snprintf(new_message + prefix_len, 500, "%d\n", new_length);
+
+    char *content_length_end = strstr(content_length_start, "\n"); // Find next newline after Content-Length
+
+    /* copy over up until start of summary */
+    first_part_length = prefix_len + bytes_written + (summary_start - content_length_end);
+    memcpy(new_message + prefix_len + bytes_written, content_length_end, summary_start - content_length_end);
+
+    /* copy over first part of summary insertion */
+    memcpy(new_message + first_part_length, SUMMARY_START, strlen(SUMMARY_START));
+    /* copy over actual summary */
+    memcpy(new_message + first_part_length + strlen(SUMMARY_START), summary, summary_size);
+    /* copy over second part of summary insertion */
+    memcpy(new_message + first_part_length + strlen(SUMMARY_START) + summary_size, SUMMARY_END, strlen(SUMMARY_END));
+    /* copy over last part of response */
+    memcpy(new_message + first_part_length + strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END), summary_start, last_part_length);
+
+
+    message->total_length += (strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END));
+    message->bytes_read += (strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END));
+    new_message[message->total_length] = '\0';
+    free(message->buffer);
+    message->buffer = new_message;
+
+    return 0;
 }

@@ -122,6 +122,7 @@ int main(int argc, char* argv[])
     int portNumber = atoi(argv[1]);
     int tunnelMode = 0;
     int printMode = 0;
+    int llmMode = 1;
     if (argc == 3) {
         if (strstr(argv[2], "tunnel") != NULL) {
             tunnelMode = 1;
@@ -509,7 +510,33 @@ int main(int argc, char* argv[])
 
                         } else if (strstr(partialMessages[i].buffer, "GET") != NULL) {
                             // check if response is already cached
+                            printf("read get request\n");
+                            printf("%s", partialMessages[i].buffer);
                             char *identifier = get_identifier(partialMessages[i].buffer);
+
+                            /* check if this is a wikipedia get request to use our llm on */
+                            if (llmMode && strstr(identifier, "wikipedia.org") != NULL && strstr(identifier, "wiki/") != NULL
+                                && strstr(identifier, "Main_Page") == NULL) {
+                                printf("llm wikipedia request found!\n");
+
+                                serverSD = clientToServer[i];
+                                if (serverSD == -1) {
+                                    printf("ERROR: llm request w/ invalid server\n");
+                                    close_client(i);
+                                    continue;
+                                }
+                                if (partialMessages[serverSD].buffer == NULL) {
+                                    free(partialMessages[serverSD].buffer);
+                                    create_Message(&partialMessages[serverSD]);
+                                    partialMessages[serverSD].use_llm = true;
+                                }
+                                
+                                /* tells the server to send the full, unencoded response */
+                                remove_header(&partialMessages[i], "Accept-Encoding");
+                                remove_header(&partialMessages[i], "If-Modified-Since");
+                                printf("%s", partialMessages[i].buffer);
+                            }
+
                             Cached_item cached_response = Cache_get(cache, identifier);
                             /* for debugging: avoid serving from cache */
                             cached_response = NULL;
@@ -817,6 +844,10 @@ int main(int argc, char* argv[])
                     int old_bytes_read = partialMessages[i].bytes_read;
                     int read_result = add_to_Message(&(partialMessages[i]), i, &(connectionTypes[i]));
 
+                    if (partialMessages[i].use_llm) {
+                        printf("just read part of llm response\n");
+                    }
+
                     /* check for pending data in underlying ssl struct */
                     if (read_result == 1 && connectionTypes[i].isHTTPs) {
                         while (SSL_pending(connectionTypes[i].ssl)) {
@@ -837,51 +868,43 @@ int main(int argc, char* argv[])
                         continue;
                     } else if (partialMessages[i].bytes_read != old_bytes_read) {
                         // send chunk we just read in (from old bytes read to current bytes read)
-                        int write_result;
-                        if (connectionTypes[i].isHTTPs) {
-                            // replaceCharacter(partialMessages[i].buffer + old_bytes_read, 'e', 'a', partialMessages[i].bytes_read - old_bytes_read);
-                            write_result = SSL_write(connectionTypes[clientSD].ssl, partialMessages[i].buffer + old_bytes_read, 
-                                partialMessages[i].bytes_read - old_bytes_read);
-                            if (printMode)
-                                fwrite(partialMessages[i].buffer + old_bytes_read, 1, partialMessages[i].bytes_read - old_bytes_read, stdout);
-                        } else {
-                            write_result = write(clientSD, partialMessages[i].buffer + old_bytes_read, 
-                                partialMessages[i].bytes_read - old_bytes_read);
-                        }
-                        if (write_result <= 0) {
-                            printf("writing to client failed with errno %d\n", errno);
-                            if (SSL_get_error(connectionTypes[clientSD].ssl, write_result) == SSL_ERROR_WANT_WRITE || errno == 35) {
-                                printf("write blocked\n");
-                                /* make fd set containing only the client and use select w/ timeout val of 500ms to wait for it to write */
-                                struct timeval *timeout;
-                                timeout = malloc(sizeof(*timeout));
-                                timeout->tv_sec = 1;
-                                timeout->tv_usec = 0;
+                        if (!partialMessages[i].use_llm) {
+                            int write_result;
+                            if (connectionTypes[i].isHTTPs) {
+                                // replaceCharacter(partialMessages[i].buffer + old_bytes_read, 'e', 'a', partialMessages[i].bytes_read - old_bytes_read);
+                                write_result = SSL_write(connectionTypes[clientSD].ssl, partialMessages[i].buffer + old_bytes_read, 
+                                    partialMessages[i].bytes_read - old_bytes_read);
+                                if (printMode)
+                                    fwrite(partialMessages[i].buffer + old_bytes_read, 1, partialMessages[i].bytes_read - old_bytes_read, stdout);
+                            } else {
+                                write_result = write(clientSD, partialMessages[i].buffer + old_bytes_read, 
+                                    partialMessages[i].bytes_read - old_bytes_read);
+                            }
+                            if (write_result <= 0) {
+                                printf("writing to client failed with errno %d\n", errno);
+                                if (SSL_get_error(connectionTypes[clientSD].ssl, write_result) == SSL_ERROR_WANT_WRITE || errno == 35) {
+                                    printf("write blocked\n");
+                                    /* make fd set containing only the client and use select w/ timeout val of 500ms to wait for it to write */
+                                    struct timeval *timeout;
+                                    timeout = malloc(sizeof(*timeout));
+                                    timeout->tv_sec = 1;
+                                    timeout->tv_usec = 0;
 
-                                fd_set solo_write_fd_set;
-                                FD_ZERO(&solo_write_fd_set);
-                                fd_set solo_read_fd_set;
-                                FD_ZERO(&solo_read_fd_set);
-                                if (SSL_get_error(connectionTypes[clientSD].ssl, write_result) == SSL_ERROR_WANT_WRITE) {
-                                    FD_SET(clientSD, &solo_write_fd_set);
-                                } else {
-                                    FD_SET(clientSD, &solo_read_fd_set);
-                                }
-                                
-                                if (select (clientSD + 1, &solo_read_fd_set, &solo_write_fd_set, NULL, timeout) < 0)
-                                {
-                                    perror ("select");
-                                    exit (EXIT_FAILURE);
-                                }
-                                if (SSL_write(connectionTypes[clientSD].ssl, partialMessages[i].buffer + old_bytes_read, 
-                                            partialMessages[i].bytes_read - old_bytes_read) < 0) {
-                                    printf("write failed again\n");
-                                    close_server(i);
-                                    close_client(clientSD);
-                                    continue;
-                                }
-                                /*
-                                if (FD_ISSET(clientSD, &solo_fd_set)) {
+                                    fd_set solo_write_fd_set;
+                                    FD_ZERO(&solo_write_fd_set);
+                                    fd_set solo_read_fd_set;
+                                    FD_ZERO(&solo_read_fd_set);
+                                    if (SSL_get_error(connectionTypes[clientSD].ssl, write_result) == SSL_ERROR_WANT_WRITE) {
+                                        FD_SET(clientSD, &solo_write_fd_set);
+                                    } else {
+                                        FD_SET(clientSD, &solo_read_fd_set);
+                                    }
+                                    
+                                    if (select (clientSD + 1, &solo_read_fd_set, &solo_write_fd_set, NULL, timeout) < 0)
+                                    {
+                                        perror ("select");
+                                        exit (EXIT_FAILURE);
+                                    }
                                     if (SSL_write(connectionTypes[clientSD].ssl, partialMessages[i].buffer + old_bytes_read, 
                                                 partialMessages[i].bytes_read - old_bytes_read) < 0) {
                                         printf("write failed again\n");
@@ -889,19 +912,29 @@ int main(int argc, char* argv[])
                                         close_client(clientSD);
                                         continue;
                                     }
+                                    /*
+                                    if (FD_ISSET(clientSD, &solo_fd_set)) {
+                                        if (SSL_write(connectionTypes[clientSD].ssl, partialMessages[i].buffer + old_bytes_read, 
+                                                    partialMessages[i].bytes_read - old_bytes_read) < 0) {
+                                            printf("write failed again\n");
+                                            close_server(i);
+                                            close_client(clientSD);
+                                            continue;
+                                        }
+                                    } else {
+                                        printf("write still blocking");
+                                        close_server(i);
+                                        close_client(clientSD);
+                                        continue;
+                                    }
+                                    */
+
                                 } else {
-                                    printf("write still blocking");
+                                    printf("errno: %d\n", errno);
                                     close_server(i);
                                     close_client(clientSD);
                                     continue;
                                 }
-                                */
-
-                            } else {
-                                printf("errno: %d\n", errno);
-                                close_server(i);
-                                close_client(clientSD);
-                                continue;
                             }
                         }
                         if (read_result == 2) {
@@ -918,6 +951,64 @@ int main(int argc, char* argv[])
                                       partialMessages[i].buffer, 
                                       partialMessages[i].total_length, 
                                       get_max_age(partialMessages[i].buffer));*/
+
+
+                            if (partialMessages[i].use_llm) {
+                                printf("response used llm \n");
+                                char *summary = "This is a summary of the page.\n";
+                                make_llm_enhanced_response(&partialMessages[i], summary, strlen(summary));
+                                printf("llm enhanced response:\n");
+                                printf("%s", partialMessages[i].buffer);
+
+                                int clientSD = serverToClient[i];
+                                int write_result;
+                                write_result = SSL_write(connectionTypes[clientSD].ssl, partialMessages[i].buffer, partialMessages[i].total_length);
+                                do {
+                                    if (write_result <= 0) {
+                                        // remove client
+                                        printf("writing to client failed - removing socket %d from client and read set\n", i);
+                                        if (SSL_get_error(connectionTypes[clientSD].ssl, write_result) == SSL_ERROR_WANT_WRITE || errno == 35) {
+                                            printf("write blocked\n");
+                                            struct timeval *timeout;
+                                            timeout = malloc(sizeof(*timeout));
+                                            timeout->tv_sec = 0;
+                                            timeout->tv_usec = 500000;
+
+                                            fd_set solo_write_fd_set;
+                                            FD_ZERO(&solo_write_fd_set);
+                                            fd_set solo_read_fd_set;
+                                            FD_ZERO(&solo_read_fd_set);
+                                            if (SSL_get_error(connectionTypes[clientSD].ssl, write_result) == SSL_ERROR_WANT_WRITE) {
+                                                FD_SET(clientSD, &solo_write_fd_set);
+                                            } else {
+                                                FD_SET(clientSD, &solo_read_fd_set);
+                                            }
+                                            
+                                            if (select (clientSD + 1, &solo_read_fd_set, &solo_write_fd_set, NULL, timeout) < 0)
+                                            {
+                                                perror ("select");
+                                                exit (EXIT_FAILURE);
+                                            }
+                                            if (FD_ISSET(clientSD, &solo_read_fd_set) || FD_ISSET(clientSD, &solo_write_fd_set)) {
+                                                write_result = SSL_write(connectionTypes[clientSD].ssl, partialMessages[i].buffer, partialMessages[i].total_length);
+                                                if (write_result < 0) {
+                                                    printf("write failed again\n");
+                                                }
+                                            } else {
+                                                printf("write still blocking");
+                                                close_client(clientSD);
+                                                close_server(i);
+                                                write_result = 1; // exit do while loop
+                                            }
+                                        } else {
+                                            close_client(clientSD);
+                                            close_server(i);
+                                            write_result = 1; // exit do while loop
+                                        }
+                                    }
+                                } while (write_result <= 0);
+                                
+                            }
                             if (partialMessages[i].bytes_read != partialMessages[i].total_length) {
                                 printf("unexpected read of more than one response\n");
                                 printf("partialMessages[i].bytes_read: %d, partialMessages[i].total_length: %d\n", partialMessages[i].bytes_read, partialMessages[i].total_length);

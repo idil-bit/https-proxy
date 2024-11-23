@@ -15,6 +15,7 @@
 #include <ctype.h>
 #include <openssl/rand.h>
 #include <arpa/inet.h>
+#include <strings.h>
 
 // -1 if error
 // otherwise socket descriptor for the server
