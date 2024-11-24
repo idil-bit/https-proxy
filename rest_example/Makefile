@@ -11,7 +11,7 @@ LIBS = -lcurl
 TARGET = example
 
 # Source file
-SRC = example.c
+SRC = example.c cJSON.c
 
 # Build the executable
 $(TARGET): $(SRC)

@@ -2,13 +2,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <curl/curl.h>
-
+#include <sys/stat.h>
+#include <stdbool.h>
+#include "cJSON.h"
 
 // dont change
 const char *url = "https://a061igc186.execute-api.us-east-1.amazonaws.com/dev";
 
 // add your API key
-const char *x_api_key = "x-api-key: your-api-key-goes-here"; // Your API key
+const char *x_api_key = "x-api-key: comp112rGOLJUIz2s5ptwXUDSytIOnpBuuDdHKXzjsck72r"; // Your API key
 
 
 // This function is called by libcurl to write data into a string buffer
@@ -42,7 +44,7 @@ void llmproxy_request(char *model, char *system, char *query, char *response_bod
              system,
              query,
              0.0,
-             1,
+             0,
              "GenericSession");
 
 
@@ -91,11 +93,85 @@ void llmproxy_request(char *model, char *system, char *query, char *response_bod
     }
 }
 
-int main() {
+void replaceCharacter(char* str, char target, char replacement, int size) {
+    if (!str) {
+        return;
+    }
+    
+    char* ptr = str;
+    for (int i = 0; i < size; i++) {
+        if (*ptr == target) {
+            *ptr = replacement;
+        }
+        ++ptr;
+    }
+}
+
+void simplifyHTML(const char *inputFileName, const char *outputFileName) {
+    FILE *inputFile = fopen(inputFileName, "r");
+    FILE *outputFile = fopen(outputFileName, "w");
+
+    if (inputFile == NULL || outputFile == NULL) {
+        perror("Error opening files");
+        if (inputFile) fclose(inputFile);
+        if (outputFile) fclose(outputFile);
+        return;
+    }
+
+    char ch;
+    bool insideTag = false;
+
+    while ((ch = fgetc(inputFile)) != EOF) {
+        if ((ch == '<') || (ch == '{')) {
+            insideTag = true; // Entering an HTML tag
+        } else if ((ch == '>') || (ch == '}')) {
+            insideTag = false; // Exiting an HTML tag
+        } else if (!insideTag) {
+            if ((ch != '\"') && (ch != '\\') && (ch != '/') && (ch != '\'') && (ch != '\n') && (ch != 9)) {
+                fputc(ch, outputFile); // Write non-tag characters to the output file
+            }
+        }
+    }
+
+    fclose(inputFile);
+    fclose(outputFile);
+    printf("HTML simplified and written to %s\n", outputFileName);
+}
+
+int main(int argc, char* argv[]) {
+    if (argc != 2) { printf("pls put url to get html from!\n"); return -1; }
+
+    char command[512];
+    snprintf(command, sizeof(command), "curl \"%s\" > %s", argv[1], "automated-inputfile.html");
+    // Execute the command
+    system(command);
+
+    simplifyHTML("automated-inputfile.html", "automated-simplified-input.txt");
+    FILE *fp = fopen("automated-simplified-input.txt", "rb");
+    struct stat fileStat;
+    if (stat("automated-simplified-input.txt", &fileStat) != 0) { printf("error with stat\n"); }
+    int pagesize = fileStat.st_size;
+    char wikipage[pagesize + 1];
+    fread(wikipage, sizeof(char), pagesize, fp);
+    wikipage[pagesize] = '\0';
+
+    char *indexEnd = strstr(wikipage, "References");
+    if (indexEnd != NULL) {
+        *indexEnd = '\0';
+    }
+    fclose(fp);
 
     // Buffer to store response data
     char response_body[4096] = "";
-    llmproxy_request("4o-mini", "Answer my question in a funny manner", "Who are the Jumbos", response_body);
-    printf("Response: %s\n", response_body);
+    llmproxy_request("4o-mini", "Summarize the wikipedia page in a couple sentences", wikipage, response_body);
+    cJSON *json = cJSON_Parse(response_body);
+
+    cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
+    if (cJSON_IsString(result) && (result->valuestring != NULL)) {
+        printf("Result: %s\n", result->valuestring);
+    }
+
+    // printf("Response: %s\n", response_body);
+
     return 0;
 }
