@@ -956,6 +956,8 @@ int main(int argc, char* argv[])
 
                             if (partialMessages[i].use_llm) {
                                 printf("response used llm \n");
+                                // char summary[1200] = "";
+                                // llmproxy_request("4o-mini", "Concisely summarize the following Wikipedia page", partialMessages[i].buffer, summary);
                                 char *summary = "This is a summary of the page.\n";
                                 make_llm_enhanced_response(&partialMessages[i], summary, strlen(summary));
                                 printf("llm enhanced response:\n");
