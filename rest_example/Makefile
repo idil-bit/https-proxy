@@ -19,7 +19,7 @@ $(TARGET): $(SRC)
 
 # Clean up build files
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) curled_wikipage.html 
 
 # Phony targets
 .PHONY: clean

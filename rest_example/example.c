@@ -6,20 +6,18 @@
 #include <stdbool.h>
 #include "cJSON.h"
 
-// dont change
+// provided to us
 const char *url = "https://a061igc186.execute-api.us-east-1.amazonaws.com/dev";
+const char *x_api_key = "x-api-key: comp112rGOLJUIz2s5ptwXUDSytIOnpBuuDdHKXzjsck72r"; // Our API key
 
-// add your API key
-const char *x_api_key = "x-api-key: comp112rGOLJUIz2s5ptwXUDSytIOnpBuuDdHKXzjsck72r"; // Your API key
-
-
-// This function is called by libcurl to write data into a string buffer
+// provided to us
 size_t write_callback(void *ptr, size_t size, size_t nmemb, char *data) {
     size_t total_size = size * nmemb; // Total size of received data
     strncat(data, ptr, total_size); // Append the received data to the buffer
     return total_size;
 }
 
+// provided to us
 void llmproxy_request(char *model, char *system, char *query, char *response_body){
     CURL *curl;
     CURLcode res;
@@ -107,71 +105,63 @@ void replaceCharacter(char* str, char target, char replacement, int size) {
     }
 }
 
-void simplifyHTML(const char *inputFileName, const char *outputFileName) {
-    FILE *inputFile = fopen(inputFileName, "r");
-    FILE *outputFile = fopen(outputFileName, "w");
-
-    if (inputFile == NULL || outputFile == NULL) {
-        perror("Error opening files");
-        if (inputFile) fclose(inputFile);
-        if (outputFile) fclose(outputFile);
+void simplifyHTML(const char *html_filename, char *simplified_content, size_t max_len) {
+    FILE *html_file = fopen(html_filename, "r");
+    if (html_file == NULL) {
+        fclose(html_file);
         return;
     }
 
-    char ch;
-    bool insideTag = false;
+    bool inside_tag = false;
+    size_t i = 0;
+    char c;
 
-    while ((ch = fgetc(inputFile)) != EOF) {
-        if ((ch == '<') || (ch == '{')) {
-            insideTag = true; // Entering an HTML tag
-        } else if ((ch == '>') || (ch == '}')) {
-            insideTag = false; // Exiting an HTML tag
-        } else if (!insideTag) {
-            if ((ch != '\"') && (ch != '\\') && (ch != '/') && (ch != '\'') && (ch != '\n') && (ch != 9)) {
-                fputc(ch, outputFile); // Write non-tag characters to the output file
+    while (((c = fgetc(html_file)) != EOF) && i < max_len) {
+        if ((c == '<') || (c == '{')) {
+            inside_tag = true;
+        } else if ((c == '>') || (c == '}')) {
+            inside_tag = false;
+        } else if (!inside_tag) {
+            if ((c != '\"') && (c != '\\') && (c != '/') && 
+                (c != '\'') && (c != '\n') && (c != 9)) {
+                simplified_content[i] = c;
+                i++;
             }
         }
     }
 
-    fclose(inputFile);
-    fclose(outputFile);
-    printf("HTML simplified and written to %s\n", outputFileName);
+    simplified_content[i] = '\0';
+    fclose(html_file);
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 2) { printf("pls put url to get html from!\n"); return -1; }
+    if (argc != 2) { printf("Usage: ./%s <wikipedia_url>!\n", argv[0]); return -1; }
 
-    char command[512];
-    snprintf(command, sizeof(command), "curl \"%s\" > %s", argv[1], "automated-inputfile.html");
-    // Execute the command
-    system(command);
+    char curl_command[512];
+    snprintf(curl_command, sizeof(curl_command), "curl \"%s\" > %s", argv[1], "curled_wikipage.html");
+    system(curl_command);
 
-    simplifyHTML("automated-inputfile.html", "automated-simplified-input.txt");
-    FILE *fp = fopen("automated-simplified-input.txt", "rb");
-    struct stat fileStat;
-    if (stat("automated-simplified-input.txt", &fileStat) != 0) { printf("error with stat\n"); }
-    int pagesize = fileStat.st_size;
-    char wikipage[pagesize + 1];
-    fread(wikipage, sizeof(char), pagesize, fp);
-    wikipage[pagesize] = '\0';
+    size_t max_len = 1024 * 10 * 10; // TODO: decide how big we want our simplified webpage to be
+    char *simplified_wikipage = (char *) malloc(max_len);
+    simplifyHTML("curled_wikipage.html", simplified_wikipage, max_len);
 
-    char *indexEnd = strstr(wikipage, "References");
-    if (indexEnd != NULL) {
-        *indexEnd = '\0';
+    char *end_of_content = strstr(simplified_wikipage, "References");
+    if (end_of_content != NULL) {
+        *end_of_content = '\0';
+    } else {
+        end_of_content = simplified_wikipage + 200; // TODO: decide on how many characters to send to the gpt
+        *end_of_content = '\0';
     }
-    fclose(fp);
 
-    // Buffer to store response data
+    // TODO: test with different prompts
     char response_body[4096] = "";
-    llmproxy_request("4o-mini", "Summarize the wikipedia page in a couple sentences", wikipage, response_body);
+    llmproxy_request("4o-mini", "Summarize the wikipedia page in a couple sentences", simplified_wikipage, response_body);
     cJSON *json = cJSON_Parse(response_body);
 
     cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
     if (cJSON_IsString(result) && (result->valuestring != NULL)) {
         printf("Result: %s\n", result->valuestring);
     }
-
-    // printf("Response: %s\n", response_body);
 
     return 0;
 }

@@ -3,6 +3,8 @@ obj = $(src:.c=.o)
 CC = gcc
 CFLAGS = -Wall -Wextra -g -fsanitize=address
 
+LIBS = -lcurl
+
 UNAME := $(shell uname)
 LDFLAGS = -L/usr/lib -lssl -lcrypto -fsanitize=address
 
@@ -18,7 +20,7 @@ endif
 
 
 a.out: $(obj)
-	$(CC) -o $@ $^ $(LDFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 .PHONY: clean
 clean:
