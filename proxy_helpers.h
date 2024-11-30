@@ -10,3 +10,5 @@ X509 *generate_x509(EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host);
 int configure_context_server(SSL_CTX *ctx, EVP_PKEY *privateKey, char *host);
 int configure_context_client(SSL_CTX *ctx, EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host);
 SSL_CTX *create_context(const SSL_METHOD *method);
+char *simplifyHTML(char *response, int response_size);
+void llmproxy_request(char *model, char *system, char *query, char *response_body);

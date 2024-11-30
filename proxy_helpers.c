@@ -1,4 +1,7 @@
 #include "proxy_helpers.h"
+
+#include <curl/curl.h>
+#include <stdbool.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -16,6 +19,17 @@
 #include <openssl/rand.h>
 #include <arpa/inet.h>
 #include <strings.h>
+
+// provided to us
+const char *url = "https://a061igc186.execute-api.us-east-1.amazonaws.com/dev";
+const char *x_api_key = "x-api-key: comp112rGOLJUIz2s5ptwXUDSytIOnpBuuDdHKXzjsck72r"; // Our API key
+
+// provided to us
+size_t write_callback(void *ptr, size_t size, size_t nmemb, char *data) {
+    size_t total_size = size * nmemb; // Total size of received data
+    strncat(data, ptr, total_size); // Append the received data to the buffer
+    return total_size;
+}
 
 // -1 if error
 // otherwise socket descriptor for the server
@@ -333,4 +347,122 @@ int configure_context_server(SSL_CTX *ctx, EVP_PKEY *privateKey, char *host) {
     */
 
     return 0;
+}
+
+char *simplifyHTML(char *response, int response_size) {
+    char *simplified_content = malloc(response_size);
+    simplified_content[0] = '\0';
+
+    /* go to start of response body */
+    char *c = strstr(response, "\r\n\r\n");
+    if (c == NULL) {
+        printf("no llm response body\n");
+        return simplified_content;
+    }
+    printf("at llm response body\n");
+    c += 4;
+    int i = 0;
+    bool inside_tag = false;
+    char *response_end = response + response_size;
+
+
+    while (c < response_end) {
+        if ((*c == '<') || (*c == '{')) {
+            inside_tag = true;
+        } else if ((*c == '>') || (*c == '}')) {
+            inside_tag = false;
+        } else if (!inside_tag) {
+            if ((*c != '\"') && (*c != '\\') && (*c != '/') && 
+                (*c != '\'') && (*c != '\n') && (*c != 9)) {
+                simplified_content[i] = *c;
+                i++;
+            }
+        }
+        c++;
+    }
+
+    simplified_content[i] = '\0';
+
+    char *end_of_content = strstr(simplified_content, "References");
+    if (end_of_content != NULL) {
+        *end_of_content = '\0';
+    }
+
+    printf("made simplified content\n");
+
+    return simplified_content;
+}
+
+// provided to us
+void llmproxy_request(char *model, char *system, char *query, char *response_body) {
+    CURL *curl;
+    CURLcode res;
+
+
+    char *request_fmt = "{\n"
+                        "  \"model\": \"%s\",\n"
+                        "  \"system\": \"%s\",\n"
+                        "  \"query\": \"%s\",\n"
+                        "  \"temperature\": %.2f,\n"
+                        "  \"lastk\": %d,\n"
+                        "  \"session_id\": \"%s\"\n"
+                        "}";
+
+    // JSON data to send in the POST request
+    char request[4096];
+    memset(request, 0, 4096);
+    snprintf(request,
+             sizeof(request),
+             request_fmt,
+             model,
+             system,
+             query,
+             0.0,
+             0,
+             "GenericSession");
+
+
+    printf("Initiating request: %s\n", request);
+
+    // Initialize CURL
+    curl = curl_easy_init();
+    if (curl) {
+        // Set the URL of the Proxy Agent server server
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+
+        // Set the Content-Type to application/json
+        struct curl_slist *headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        
+        // Add x-api-key to header
+        headers = curl_slist_append(headers, x_api_key);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+        // add request 
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request);
+
+
+        // Set the write callback function to capture response data
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+
+        // Set the buffer to write the response into
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, response_body);
+
+        // Perform the POST request
+        res = curl_easy_perform(curl);
+
+        // Check if the request was successful
+        if(res != CURLE_OK) {
+            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        }
+
+        // Cleanup
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+    } else {
+        fprintf(stderr, "Failed to initialize CURL.\n");
+    }
 }

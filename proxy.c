@@ -1,6 +1,7 @@
 #include "cache.h"
 #include "proxy_helpers.h"
 #include "message.h"
+#include "cJSON.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -958,7 +959,25 @@ int main(int argc, char* argv[])
                                 printf("response used llm \n");
                                 // char summary[1200] = "";
                                 // llmproxy_request("4o-mini", "Concisely summarize the following Wikipedia page", partialMessages[i].buffer, summary);
-                                char *summary = "This is a summary of the page.\n";
+                                // char *summary = "This is a summary of the page.\n";
+                                char *simplified_content = simplifyHTML(partialMessages[i].buffer, partialMessages[i].total_length);
+                                // TODO: test with different prompts
+                                char response_body[8192] = "";
+                                llmproxy_request("4o-mini", "Summarize the wikipedia page in less than 500 words. Avoid very short paragraphs.", simplified_content, response_body);
+                                cJSON *json = cJSON_Parse(response_body);
+
+                                cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
+                                char *summary = NULL;
+                                if (cJSON_IsString(result) && (result->valuestring != NULL)) {
+                                    // printf("Result: %s\n", result->valuestring);
+                                    summary = result->valuestring;
+                                } else {
+                                    summary = "";
+                                }
+
+                                /* TODO: cache simplified content */
+                                free(simplified_content);
+
                                 make_llm_enhanced_response(&partialMessages[i], summary, strlen(summary));
                                 printf("llm enhanced response:\n");
                                 //printf("%s", partialMessages[i].buffer);
@@ -1037,6 +1056,31 @@ int main(int argc, char* argv[])
                                 /* if https connection then connection to server is already established so
                                     we can just send the message */
                                 if (connectionTypes[clientSD].isHTTPs) {
+                                    char *identifier = get_identifier(partialMessages[i].buffer);
+                                    if (strstr(partialMessages[i].buffer, "GET") != NULL && 
+                                        llmMode && strstr(identifier, "wikipedia.org") != NULL && strstr(identifier, "wiki/") != NULL
+                                        && strstr(identifier, "Main_Page") == NULL) {
+                                        printf("llm wikipedia request found!\n");
+
+                                        serverSD = clientToServer[i];
+                                        if (serverSD == -1) {
+                                            printf("ERROR: llm request w/ invalid server\n");
+                                            close_client(i);
+                                            continue;
+                                        }
+                                        identifiers[serverSD] = identifier;
+                                        if (partialMessages[serverSD].buffer != NULL) {
+                                            free(partialMessages[serverSD].buffer);
+                                        }
+                                        create_Message(&partialMessages[serverSD]);
+                                        partialMessages[serverSD].use_llm = true;
+                                        
+                                        /* tells the server to send the full, unencoded response */
+                                        remove_header(&partialMessages[i], "Accept-Encoding");
+                                        remove_header(&partialMessages[i], "If-Modified-Since");
+                                    }
+
+
                                     /* forward message to server */
                                     if (SSL_write(connectionTypes[i].ssl, partialMessages[clientSD].buffer, partialMessages[clientSD].total_length) == -1) {
                                         /* close client and server connections */
