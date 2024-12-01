@@ -148,6 +148,13 @@ int check_message(Message *message, int sd) {
                 printf("no content length or chunked transfer encoding\n");
                 printf("%s", message->buffer);
             }
+            if (strstr(message->buffer, "HTTP/1.1 304") != NULL ||
+                strstr(message->buffer, "HTTP/1.1 204") != NULL ||
+                strstr(message->buffer, "HTTP/1.1 205") != NULL ||
+                strstr(message->buffer, "HTTP/1.1 1") != NULL) {
+                /* response has no body */
+                return 0;
+            }
             /* no content-length and no transfer-encoding means body length is determined 
                 by bytes sent until server closes connection*/
             /* turn on tunnel mode */
@@ -237,7 +244,7 @@ void remove_header(Message *message, char *header) {
     }
 }
 
-int make_llm_enhanced_response(Message *message, char *summary, int summary_size) {
+int make_llm_enhanced_response(Message *message, char *summary_endpoint, int summary_size) {
 
     char *page_start = "Wikipedia, the free encyclopedia</div>";
     char *summary_start = strstr(message->buffer, page_start);
@@ -248,7 +255,7 @@ int make_llm_enhanced_response(Message *message, char *summary, int summary_size
     int first_part_length = summary_start - message->buffer;
     int last_part_length = message->total_length - first_part_length;
 
-    char *new_message = malloc(message->total_length + strlen(SUMMARY_START) + strlen(SUMMARY_END) + strlen(summary) + 5); // + 5 in case content length increases
+    char *new_message = malloc(message->total_length + strlen(SUMMARY_START) + strlen(SUMMARY_END) + strlen(summary_endpoint) + 5); // + 5 in case content length increases
 
     char *content_length_start = strcasestr(message->buffer, "Content-Length:");
     content_length_start += strlen("Content-Length:");
@@ -273,15 +280,20 @@ int make_llm_enhanced_response(Message *message, char *summary, int summary_size
     /* copy over first part of summary insertion */
     memcpy(new_message + first_part_length, SUMMARY_START, strlen(SUMMARY_START));
     /* copy over actual summary */
-    memcpy(new_message + first_part_length + strlen(SUMMARY_START), summary, summary_size);
+    memcpy(new_message + first_part_length + strlen(SUMMARY_START), summary_endpoint, summary_size);
     /* copy over second part of summary insertion */
     memcpy(new_message + first_part_length + strlen(SUMMARY_START) + summary_size, SUMMARY_END, strlen(SUMMARY_END));
     /* copy over last part of response */
     memcpy(new_message + first_part_length + strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END), summary_start, last_part_length);
 
 
-    message->total_length += (strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END));
-    message->bytes_read += (strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END));
+    int new_message_length = first_part_length + strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END) + last_part_length;
+    int str_length = strlen(new_message);
+    message->total_length = new_message_length > str_length ? new_message_length : str_length;
+    message->bytes_read = new_message_length > str_length ? new_message_length : str_length;
+    if (message->total_length == str_length) {
+        printf("string length used\n");
+    }
     new_message[message->total_length] = '\0';
     free(message->buffer);
     message->buffer = new_message;

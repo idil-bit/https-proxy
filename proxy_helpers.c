@@ -104,11 +104,7 @@ char *get_host(char *message) {
     char *host = malloc(host_length + 5); // + 4 for :443, + 1 for \0
     memcpy(host, host_start, host_length);
     if (port == NULL) {
-        if (strstr(message, "CONNECT") != NULL) {
-            memcpy(host + host_length, ":443", 5);
-        } else {
-            memcpy(host + host_length, ":80", 4);
-        }
+        memcpy(host + host_length, ":443", 5);
     } else {
         host[host_length] = '\0';
     }
@@ -149,9 +145,8 @@ char *get_identifier(char *request) {
     int url_len = url_end - url_start;
     char *identifier = malloc(host_len + url_len + 2);
     memcpy(identifier, host, host_len);
-    identifier[host_len] = '/';
-    memcpy(identifier + host_len + 1, url_start, url_len);
-    identifier[host_len + url_len + 1] = '\0';
+    memcpy(identifier + host_len, url_start, url_len);
+    identifier[host_len + url_len] = '\0';
     free(host);
     return identifier;
 }

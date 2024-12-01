@@ -27,6 +27,7 @@
 
 int proxySD;
 Cache cache;
+Cache wiki_cache;
 Message partialMessages[FD_SETSIZE];
 char *identifiers[FD_SETSIZE]; // mapping of serverSD to cache identifiers
 EVP_PKEY *publicKey;
@@ -34,6 +35,7 @@ EVP_PKEY *privateKey;
 fd_set clients_set, servers_set; // holds client and server sockets
 fd_set ssl_handshakes; // holds sockets in the middle of ssl handshakes
 fd_set read_fd_set, read_fd_set_copy, write_fd_set, write_fd_set_copy;
+fd_set wiki_clients; // keep track of wikipedia clients
 int clientToServer[FD_SETSIZE]; // for each clientSD, the serverSD they talk to
 int serverToClient[FD_SETSIZE]; // for each serverSD, the clientSD they talk to
 ConnectionType connectionTypes[FD_SETSIZE];
@@ -72,6 +74,7 @@ void close_client(int clientSD) {
     FD_CLR(clientSD, &ssl_handshakes);
     FD_CLR(clientSD, &write_fd_set);
     FD_CLR(clientSD, &write_fd_set_copy);
+    FD_CLR(clientSD, &wiki_clients);
     clientToServer[clientSD] = -1;
 }
 
@@ -101,6 +104,7 @@ void signal_handler(int signal) {
     (void) signal;
     close(proxySD);
     Cache_free(&cache);
+    Cache_free(&wiki_cache);
     for (int i = 0; i < FD_SETSIZE; i++) {
         if (partialMessages[i].buffer != NULL) {
             free(partialMessages[i].buffer);
@@ -157,6 +161,7 @@ int main(int argc, char* argv[])
     if (listen(proxySD, 0) == -1) { return -1; }
 
     cache = Cache_new(CACHE_SIZE);
+    wiki_cache = Cache_new(10);
 
     ConnectionType connectionTypes[FD_SETSIZE];
     for (int i = 0; i < FD_SETSIZE; i++) {
@@ -411,6 +416,7 @@ int main(int argc, char* argv[])
                         int bytes_written;
                         int bytes_to_read = BUFFER_SIZE;
                         if ((connectionTypes[i].isHTTPs) && !tunnelMode) {
+                            printf("client is in tunnel mode\n");
                             do {
                                 if (bytes_to_read > BUFFER_SIZE) {
                                     bytes_to_read = BUFFER_SIZE;
@@ -463,7 +469,12 @@ int main(int argc, char* argv[])
                         FD_SET(i, &write_fd_set);
                         continue;
                     }
-                    if (read_result == 0) {
+                    if (read_result == 0 || (read_result == 2 && partialMessages[i].header_read)) {
+                        if (FD_ISSET(i, &wiki_clients)) {
+                            /* tells the server to send the full, unencoded response */
+                            remove_header(&partialMessages[i], "Accept-Encoding");
+                            remove_header(&partialMessages[i], "If-Modified-Since");
+                        }
                         if (strstr(partialMessages[i].buffer, "CONNECT") != NULL) {
                             printf("connect received from socket %d!: \n%s\n", i, partialMessages[i].buffer);
                             int serverSD = get_server_socket(partialMessages[i].buffer);
@@ -506,7 +517,12 @@ int main(int argc, char* argv[])
                                 free(identifiers[serverSD]);
                                 identifiers[serverSD] = NULL;
                             }
-                            identifiers[serverSD] = get_host(partialMessages[i].buffer);    
+                            identifiers[serverSD] = get_host(partialMessages[i].buffer);  
+                            if (strstr(identifiers[serverSD], "wikipedia.org") != NULL) {
+                                printf("connecting to wikipedia\n");
+                                /* make sure that all requests from the client socket now do not accept content encoding */
+                                FD_SET(i, &wiki_clients);
+                            }  
                             continue;
 
                         } else if (strstr(partialMessages[i].buffer, "GET") != NULL) {
@@ -521,12 +537,19 @@ int main(int argc, char* argv[])
                                 && strstr(identifier, "Main_Page") == NULL) {
                                 printf("llm wikipedia request found!\n");
 
+                                if (strstr(partialMessages[i].buffer, "summary: true") != NULL) {
+                                    /* TODO: handle summary request */
+                                    printf("got summary request\n");
+                                    continue;
+                                }
+
                                 serverSD = clientToServer[i];
                                 if (serverSD == -1) {
                                     printf("ERROR: llm request w/ invalid server\n");
                                     close_client(i);
                                     continue;
                                 }
+                                identifiers[serverSD] = get_identifier(partialMessages[i].buffer);
                                 if (partialMessages[serverSD].buffer != NULL) {
                                     free(partialMessages[serverSD].buffer);
                                 }
@@ -594,11 +617,11 @@ int main(int argc, char* argv[])
                             } else if (connectionTypes[i].isHTTPs) {
                                 // printf("read GET message from https client\n");
                                 /* ssl connection to server is already established */
+                                /* tells the server to send the full, unencoded response */
+                                remove_header(&partialMessages[i], "Accept-Encoding");
+                                remove_header(&partialMessages[i], "If-Modified-Since");
                                 int serverSD = clientToServer[i];
                                 /* TODO: check if serverSD = -1*/
-                                if (!FD_ISSET(serverSD, &ssl_handshakes)) {
-                                    // printf("sending request to server at socket %d\n", serverSD);
-                                }
                                 if (!FD_ISSET(serverSD, &ssl_handshakes) && 
                                     SSL_write(connectionTypes[serverSD].ssl, partialMessages[i].buffer, partialMessages[i].total_length) <= 0) {
                                     /* we have to wait for the ssl handshake w/ the server to complete before sending the request */
@@ -640,6 +663,9 @@ int main(int argc, char* argv[])
                             }
                         } else {
                             /* TODO: would it make sense to just forward the message here but not cache the result? */
+                            /* tells the server to send the full, unencoded response */
+                            remove_header(&partialMessages[i], "Accept-Encoding");
+                            remove_header(&partialMessages[i], "If-Modified-Since");
                             if (connectionTypes[i].isHTTPs) {
                                 serverSD = clientToServer[i];
                                 if (!FD_ISSET(serverSD, &ssl_handshakes) &&
@@ -660,6 +686,7 @@ int main(int argc, char* argv[])
                         continue;      
                     } else if (read_result == 2) {
                         connectionTypes[i].isTunnel = true;
+                        printf("unknown request from client - turning on tunnel mode\n");
                         
                         /* tunnel request to server */
                         if (connectionTypes[i].isHTTPs) {
@@ -940,7 +967,9 @@ int main(int argc, char* argv[])
                             }
                         }
                         if (read_result == 2) {
-                            /* turn on tunnel mode for client and server */
+                            /* turn on tunnel mode for server */
+                            printf("turning on tunnel mode for server and client\n");
+
                             connectionTypes[clientSD].isTunnel = true;
                             connectionTypes[i].isTunnel = true;
                         } else if (read_result == 0) {
@@ -959,9 +988,15 @@ int main(int argc, char* argv[])
                                 printf("response used llm \n");
                                 // char summary[1200] = "";
                                 // llmproxy_request("4o-mini", "Concisely summarize the following Wikipedia page", partialMessages[i].buffer, summary);
-                                // char *summary = "This is a summary of the page.\n";
+                                char summary_endpoint[strlen(identifiers[i]) + strlen("https://") + 1];
+                                strcpy(summary_endpoint, "https://");
+                                strcat(summary_endpoint, identifiers[i]);
                                 char *simplified_content = simplifyHTML(partialMessages[i].buffer, partialMessages[i].total_length);
+
+                                /* cache simplified content */
+                                Cache_put(wiki_cache, identifiers[serverSD], simplified_content, strlen(simplified_content), 3600);
                                 // TODO: test with different prompts
+                                /*
                                 char response_body[8192] = "";
                                 llmproxy_request("4o-mini", "Summarize the wikipedia page in less than 500 words. Avoid very short paragraphs.", simplified_content, response_body);
                                 cJSON *json = cJSON_Parse(response_body);
@@ -969,18 +1004,17 @@ int main(int argc, char* argv[])
                                 cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
                                 char *summary = NULL;
                                 if (cJSON_IsString(result) && (result->valuestring != NULL)) {
-                                    // printf("Result: %s\n", result->valuestring);
                                     summary = result->valuestring;
                                 } else {
                                     summary = "";
                                 }
+                                */
 
-                                /* TODO: cache simplified content */
                                 free(simplified_content);
 
-                                make_llm_enhanced_response(&partialMessages[i], summary, strlen(summary));
+                                make_llm_enhanced_response(&partialMessages[i], summary_endpoint, strlen(summary_endpoint));
                                 printf("llm enhanced response:\n");
-                                //printf("%s", partialMessages[i].buffer);
+                                printf("%s", partialMessages[i].buffer);
 
                                 int clientSD = serverToClient[i];
                                 int write_result;

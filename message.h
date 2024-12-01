@@ -17,9 +17,35 @@
                                 <div class=\"mw-heading mw-heading2\"> \n\
                                     <h2 id=\"AI-Summary\">AI-Generated Summary</h2> \n\
                                 </div> \n\
-                                <p>\n"
+                    <p id=\"summary-text\">\n\
+                        Loading summary...\n\
+                    </p>\n\
+                </div>\n\
+                \n\
+                <script>\n\
+                    async function fetchSummary() { \n\
+                        try { \n\
+                            const response = await fetch(\""
+                            
+#define SUMMARY_END "\", {\n\
+                                method: 'GET',\n\
+                                headers: {\n\
+                                    'summary': 'true'\n\
+                                }\n\
+                            });\n\
+                            if (!response.ok) {\n\
+                                throw new Error(`Error: ${response.statusText}`);\n\
+                            }\n\
+                            const summary = await response.text(); /* assuming the summary is plain text */ \n\
+                            document.getElementById('summary-text').textContent = summary;\n\
+                        } catch (error) {\n\
+                            document.getElementById('summary-text').textContent = 'Failed to load summary.';\n\
+                            console.error('Summary fetch error:', error);\n\
+                        }\n\
+                    }\n\
+                    window.onload = fetchSummary;\n\
+                </script>"
 
-#define SUMMARY_END "</p> \n</div> \n"
 
 struct Message {
     char *buffer;
@@ -46,6 +72,6 @@ void expand_buffer(Message *message);
 int check_message(Message *message, int sd);
 int update_Message(Message *message);
 void remove_header(Message *message, char *header);
-int make_llm_enhanced_response(Message *message, char *summary, int summary_size);
+int make_llm_enhanced_response(Message *message, char *summary_endpoint, int summary_size);
 
 #endif
