@@ -136,7 +136,9 @@ int check_message(Message *message, int sd) {
         int headerSize = endOfResponse + 4 - message->buffer;
         message->total_length = headerSize;
         /* use memcmp to make sure GET or CONNECT is at start of message */
-        if (memcmp(message->buffer, "GET", 3) == 0 || memcmp(message->buffer, "CONNECT", 7) == 0) {
+        if (memcmp(message->buffer, "GET", 3) == 0 || memcmp(message->buffer, "CONNECT", 7) == 0 ||
+            memcmp(message->buffer, "HEAD", 4) == 0 || memcmp(message->buffer, "OPTIONS", 7) == 0 ||
+            memcmp(message->buffer, "DELETE", 6) == 0 || memcmp(message->buffer, "TRACE", 5) == 0) {
             return 0;
         } 
         // find the content-length field

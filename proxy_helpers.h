@@ -17,5 +17,5 @@ int configure_context_client(SSL_CTX *ctx, EVP_PKEY *publicKey, EVP_PKEY *privat
 SSL_CTX *create_context(const SSL_METHOD *method);
 char *simplifyHTML(char *html_content, size_t content_length);
 void get_wiki_content(char *wiki_url, data *d);
-void llmproxy_request(char *model, char *system, char *query, char *response_body);
+void llmproxy_request(char *model, char *system, char *query, char *response_body, int lastk, char *session_id);
 char *make_summary_response(char *summary);

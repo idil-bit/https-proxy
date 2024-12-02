@@ -469,13 +469,49 @@ int main(int argc, char* argv[])
                         FD_SET(i, &write_fd_set);
                         continue;
                     }
-                    if (read_result == 0 || (read_result == 2 && partialMessages[i].header_read)) {
+                    if (read_result == 0) {
                         if (FD_ISSET(i, &wiki_clients)) {
                             /* tells the server to send the full, unencoded response */
                             remove_header(&partialMessages[i], "Accept-Encoding");
                             remove_header(&partialMessages[i], "If-Modified-Since");
                         }
-                        if (strstr(partialMessages[i].buffer, "CONNECT") != NULL) {
+                        char *identifier = get_identifier(partialMessages[i].buffer);
+                        /* check if we have received a question request */
+                        if (memcmp(partialMessages[i].buffer, "POST", 4) == 0 && llmMode 
+                                && strstr(identifier, "wikipedia.org") != NULL && strstr(identifier, "wiki/") != NULL
+                                && strstr(identifier, "Main_Page") == NULL 
+                                && strstr(partialMessages[i].buffer, "question: true") != NULL) {
+                                printf("got question\n");
+                                /* get answer to question from LLM
+                                 * pass in 100 for lastk so it has access to the wikipedia page and past questions
+                                 * set session_id to the identifier
+                                 */
+                                char response_body[8192] = "";
+                                /* set session_id to identifier */
+                                llmproxy_request("4o-mini", "Answer this question in less than 500 words. You can use content from the wikipedia page. ", 
+                                                    strstr(partialMessages[i].buffer, "\r\n\r\n") + 4, response_body, 100, identifier);
+
+                                cJSON *json = cJSON_Parse(response_body);
+
+                                cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
+                                char *answer = NULL;
+                                if (cJSON_IsString(result) && (result->valuestring != NULL)) {
+                                    answer = result->valuestring;
+                                } else {
+                                    answer = "";
+                                }
+                                printf("answer: %s\n", answer);
+
+                                char *answer_response = make_summary_response(answer);
+                                
+                                int write_res = SSL_write(connectionTypes[i].ssl, answer_response, strlen(answer_response));
+                                if (write_res < 0) {
+                                    printf("sending answer to server failed\n");
+                                }
+                                
+                                continue;
+                        }
+                        else if (memcmp(partialMessages[i].buffer, "CONNECT", 7) == 0) {
                             printf("connect received from socket %d!: \n%s\n", i, partialMessages[i].buffer);
                             int serverSD = get_server_socket(partialMessages[i].buffer);
                             if (serverSD == -1) {
@@ -525,7 +561,7 @@ int main(int argc, char* argv[])
                             }  
                             continue;
 
-                        } else if (strstr(partialMessages[i].buffer, "GET") != NULL) {
+                        } else if (memcmp(partialMessages[i].buffer, "GET", 3) == 0) {
                             // check if response is already cached
                             printf("read get request line 513\n");
                             printf("%s", partialMessages[i].buffer);
@@ -544,8 +580,9 @@ int main(int argc, char* argv[])
                                     Cached_item cached_content = Cache_get(wiki_cache, identifier);
                                     char *simplified_content = cached_content->value;
                                     char response_body[8192] = "";
+                                    /* set session_id to identifier */
                                     llmproxy_request("4o-mini", "Summarize the wikipedia page in less than 500 words. "
-                                                                    "Avoid very short paragraphs.", simplified_content, response_body);
+                                                                    "Avoid very short paragraphs.", simplified_content, response_body, 0, identifier);
                                     // llmproxy_request("4o-mini", "Summarize the wikipedia page in a couple sentences", simplified_content, response_body); // TODO: test with different prompts
 
                                     cJSON *json = cJSON_Parse(response_body);
@@ -643,9 +680,6 @@ int main(int argc, char* argv[])
                             } else if (connectionTypes[i].isHTTPs) {
                                 // printf("read GET message from https client\n");
                                 /* ssl connection to server is already established */
-                                /* tells the server to send the full, unencoded response */
-                                remove_header(&partialMessages[i], "Accept-Encoding");
-                                remove_header(&partialMessages[i], "If-Modified-Since");
                                 int serverSD = clientToServer[i];
                                 /* TODO: check if serverSD = -1*/
                                 if (!FD_ISSET(serverSD, &ssl_handshakes) && 
@@ -689,9 +723,6 @@ int main(int argc, char* argv[])
                             }
                         } else {
                             /* TODO: would it make sense to just forward the message here but not cache the result? */
-                            /* tells the server to send the full, unencoded response */
-                            remove_header(&partialMessages[i], "Accept-Encoding");
-                            remove_header(&partialMessages[i], "If-Modified-Since");
                             if (connectionTypes[i].isHTTPs) {
                                 serverSD = clientToServer[i];
                                 if (!FD_ISSET(serverSD, &ssl_handshakes) &&

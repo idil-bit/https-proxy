@@ -476,7 +476,8 @@ char *simplifyHTML(char *html_content, size_t content_length) {
 }
 
 // provided to us
-void llmproxy_request(char *model, char *system, char *query, char *response_body) {
+void llmproxy_request(char *model, char *system, char *query, char *response_body, int lastk, char *session_id) {
+    session_id = session_id == NULL? "GenericSession" : session_id;
     CURL *curl;
     CURLcode res;
 
@@ -501,8 +502,8 @@ void llmproxy_request(char *model, char *system, char *query, char *response_bod
              system,
              query,
              0.0,
-             0,
-             "GenericSession");
+             lastk,
+             session_id);
 
 
     printf("Initiating request: %s\n", request);
