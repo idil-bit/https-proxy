@@ -540,6 +540,32 @@ int main(int argc, char* argv[])
                                 if (strstr(partialMessages[i].buffer, "summary: true") != NULL) {
                                     /* TODO: handle summary request */
                                     printf("got summary request\n");
+
+                                    Cached_item cached_content = Cache_get(wiki_cache, identifier);
+                                    char *simplified_content = cached_content->value;
+                                    char response_body[8192] = "";
+                                    llmproxy_request("4o-mini", "Summarize the wikipedia page in less than 500 words. "
+                                                                    "Avoid very short paragraphs.", simplified_content, response_body);
+                                    // llmproxy_request("4o-mini", "Summarize the wikipedia page in a couple sentences", simplified_content, response_body); // TODO: test with different prompts
+
+                                    cJSON *json = cJSON_Parse(response_body);
+
+                                    cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
+                                    char *summary = NULL;
+                                    if (cJSON_IsString(result) && (result->valuestring != NULL)) {
+                                        summary = result->valuestring;
+                                    } else {
+                                        summary = "";
+                                    }
+                                    printf("summary: %s\n", summary);
+
+                                    char *summary_response = make_summary_response(summary);
+                                    
+                                    int write_res = SSL_write(connectionTypes[i].ssl, summary_response, strlen(summary_response));
+                                    if (write_res < 0) {
+                                        printf("sending summary to server failed\n");
+                                    }
+                                    
                                     continue;
                                 }
 
@@ -991,10 +1017,14 @@ int main(int argc, char* argv[])
                                 char summary_endpoint[strlen(identifiers[i]) + strlen("https://") + 1];
                                 strcpy(summary_endpoint, "https://");
                                 strcat(summary_endpoint, identifiers[i]);
-                                char *simplified_content = simplifyHTML(partialMessages[i].buffer, partialMessages[i].total_length);
+                                data html_content;
+                                get_wiki_content(summary_endpoint, &html_content);
+                                // char *simplified_content = simplifyHTML(html_content.response_data, html_content.response_size);
+                                char *simplified_content = simplifyHTML(strstr(partialMessages[i].buffer, "\r\n\r\n") + 4, html_content.response_size);
 
                                 /* cache simplified content */
                                 Cache_put(wiki_cache, identifiers[serverSD], simplified_content, strlen(simplified_content), 3600);
+                                
                                 // TODO: test with different prompts
                                 /*
                                 char response_body[8192] = "";
@@ -1012,9 +1042,11 @@ int main(int argc, char* argv[])
 
                                 free(simplified_content);
 
+                                
                                 make_llm_enhanced_response(&partialMessages[i], summary_endpoint, strlen(summary_endpoint));
                                 printf("llm enhanced response:\n");
                                 printf("%s", partialMessages[i].buffer);
+                                
 
                                 int clientSD = serverToClient[i];
                                 int write_result;

@@ -31,6 +31,24 @@ size_t write_callback(void *ptr, size_t size, size_t nmemb, char *data) {
     return total_size;
 }
 
+size_t write_callback_wiki(void *ptr, size_t size, size_t nmemb, char *curl_response) {
+    size_t total_size = size * nmemb; 
+    data *d = (data *)curl_response;
+
+    char *temp = realloc(d->response_data, d->response_size + total_size + 1);
+    if (temp == NULL) {
+        fprintf(stderr, "Not enough memory to store response.\n");
+        return 0;
+    }
+
+    d->response_data = temp;
+    memcpy(&(d->response_data[d->response_size]), ptr, total_size);
+    d->response_size += total_size;
+    d->response_data[d->response_size] = '\0';
+    
+    return total_size;
+}
+
 // -1 if error
 // otherwise socket descriptor for the server
 int get_server_socket(char *message) {
@@ -344,29 +362,44 @@ int configure_context_server(SSL_CTX *ctx, EVP_PKEY *privateKey, char *host) {
     return 0;
 }
 
-char *simplifyHTML(char *response, int response_size) {
+/*char *simplifyHTML(char *response, int response_size) {
     char *simplified_content = malloc(response_size);
     simplified_content[0] = '\0';
 
-    /* go to start of response body */
-    char *c = strstr(response, "\r\n\r\n");
+ 
+    char *c = strstr(response, "<body");
     if (c == NULL) {
         printf("no llm response body\n");
         return simplified_content;
     }
     printf("at llm response body\n");
-    c += 4;
+    c = strstr(c, ">");
+    if (c == NULL) {
+        printf("no llm response body\n");
+        return simplified_content;
+    }
+    c++;
     int i = 0;
     bool inside_tag = false;
     char *response_end = response + response_size;
+    bool inside_script = false; // Track if inside a <script> block
+    bool inside_style = false;
 
 
     while (c < response_end) {
         if ((*c == '<') || (*c == '{')) {
             inside_tag = true;
+            // Check if entering a <script> block
+            if (strncasecmp(c, "<script", 7) == 0) {
+                inside_script = true;
+            }
         } else if ((*c == '>') || (*c == '}')) {
             inside_tag = false;
-        } else if (!inside_tag) {
+            // Check if exiting a <script> block
+            if (inside_script && strncasecmp(c - 7, "</script", 8) == 0) {
+                inside_script = false;
+            }
+        } else if (!inside_tag && !inside_script) {
             if ((*c != '\"') && (*c != '\\') && (*c != '/') && 
                 (*c != '\'') && (*c != '\n') && (*c != 9)) {
                 simplified_content[i] = *c;
@@ -378,13 +411,67 @@ char *simplifyHTML(char *response, int response_size) {
 
     simplified_content[i] = '\0';
 
+    
+    
+
+    printf("made simplified content:\n%s\n", simplified_content);
+
+    return simplified_content;
+}*/
+
+char *simplifyHTML(char *html_content, size_t content_length) {
+    char *simplified_content = malloc(strlen(html_content));
+    bool inside_tag = false;
+    size_t i = 0;
+    char c;
+    size_t j = 0;
+
+    bool inside_script = false; // Track if inside a <script> block
+    bool inside_style = false; // track if inside a <style> block
+
+    while ((c = html_content[j]) != '\0' && j < content_length) {
+        if (c == '<') {
+            inside_tag = true;
+            // Check if entering a <script> block
+            if (strncasecmp(html_content + j, "<script", 7) == 0) {
+                inside_script = true;
+            }
+            // check if entering a <style> block
+            if (strncasecmp(html_content + j, "<style", 6) == 0) {
+                inside_style = true;
+            }
+        } else if (c == '>') {
+            inside_tag = false;
+            // Check if exiting a <script> block
+            if (inside_script && strncasecmp(html_content + j - 8, "</script", 8) == 0) {
+                inside_script = false;
+            }
+            // Check if exiting a <style> block
+            if (inside_style && strncasecmp(html_content + j - 7, "</style", 7) == 0) {
+                inside_style = false;
+            }
+        } else if (!inside_tag && !inside_script && !inside_style) {
+            if (c != '\"' && c != '\\' && c != '/' &&
+                c != '\'' && c != '\n' && c != '\t') {
+                simplified_content[i] = c;
+                i++;
+            }
+        }
+        j++;
+    }
+
+    simplified_content[i] = '\0';
+
+    /* NOTE: I think this will just use the wikipedia header sections, but it seems to be working so maybe keep it? 
+     * Otherwise the request will time out */
+    /*
     char *end_of_content = strstr(simplified_content, "References");
     if (end_of_content != NULL) {
         *end_of_content = '\0';
     }
+    */
 
-    printf("made simplified content\n");
-
+    printf("made simplified content:\n%s\n", simplified_content);
     return simplified_content;
 }
 
@@ -404,8 +491,9 @@ void llmproxy_request(char *model, char *system, char *query, char *response_bod
                         "}";
 
     // JSON data to send in the POST request
-    char request[4096];
-    memset(request, 0, 4096);
+    int query_len = strlen(query);
+    char request[4096 + query_len];
+    memset(request, 0, 4096 + query_len);
     snprintf(request,
              sizeof(request),
              request_fmt,
@@ -460,4 +548,53 @@ void llmproxy_request(char *model, char *system, char *query, char *response_bod
     } else {
         fprintf(stderr, "Failed to initialize CURL.\n");
     }
+}
+
+void get_wiki_content(char *wiki_url, data *d) {
+    CURL *curl;
+    CURLcode res;
+
+    curl = curl_easy_init();
+    if (curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, wiki_url);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback_wiki);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)d);
+
+        res = curl_easy_perform(curl);
+        if (res != CURLE_OK) {
+            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        }
+
+        curl_easy_cleanup(curl);
+    } else {
+        fprintf(stderr, "Failed to initialize curl\n");
+    }
+}
+
+char *make_summary_response(char *summary) {
+    // HTTP response template
+    const char *response_template = 
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Length: %zu\r\n"
+        "\r\n"
+        "%s";
+
+    // Calculate content length
+    size_t content_length = strlen(summary);
+
+    // Allocate memory for the full response
+    size_t response_size = strlen(response_template) + content_length + 10;
+    char *response = malloc(response_size);
+
+    if (response == NULL) {
+        perror("Failed to allocate memory for response");
+        return NULL;
+    }
+
+    // Format the response
+    snprintf(response, response_size, response_template, content_length, summary);
+
+    return response;
+
 }

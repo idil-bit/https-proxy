@@ -263,7 +263,7 @@ int make_llm_enhanced_response(Message *message, char *summary_endpoint, int sum
         content_length_start++;
     }
     int contentLength = atoi(content_length_start);
-    int new_length = contentLength + strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END);
+    int new_length = contentLength + strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END) + 2;
 
     size_t prefix_len = content_length_start - message->buffer;
     memcpy(new_message, message->buffer, prefix_len);
@@ -291,9 +291,6 @@ int make_llm_enhanced_response(Message *message, char *summary_endpoint, int sum
     int str_length = strlen(new_message);
     message->total_length = new_message_length > str_length ? new_message_length : str_length;
     message->bytes_read = new_message_length > str_length ? new_message_length : str_length;
-    if (message->total_length == str_length) {
-        printf("string length used\n");
-    }
     new_message[message->total_length] = '\0';
     free(message->buffer);
     message->buffer = new_message;
