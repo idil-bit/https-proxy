@@ -244,56 +244,106 @@ void remove_header(Message *message, char *header) {
     }
 }
 
-int make_llm_enhanced_response(Message *message, char *summary_endpoint, int summary_size) {
+// int make_llm_enhanced_response(Message *message, char *summary_endpoint, int summary_size) {
+// 
+//     char *page_start = "Wikipedia, the free encyclopedia</div>";
+//     char *summary_start = strstr(message->buffer, page_start);
+//     if (summary_start == NULL) {
+//         return -1;
+//     } 
+//     summary_start += (strlen(page_start) + 1); /* + 1 for newline */
+//     int first_part_length = summary_start - message->buffer;
+//     int last_part_length = message->total_length - first_part_length;
+// 
+//     char *new_message = malloc(message->total_length + strlen(SUMMARY_START) + strlen(SUMMARY_END) + strlen(summary_endpoint) + 5); // + 5 in case content length increases
+// 
+//     char *content_length_start = strcasestr(message->buffer, "Content-Length:");
+//     content_length_start += strlen("Content-Length:");
+//     while (*content_length_start == ' ' || *content_length_start == '\t') {
+//         content_length_start++;
+//     }
+//     int contentLength = atoi(content_length_start);
+//     int new_length = contentLength + strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END) + 2;
+// 
+//     size_t prefix_len = content_length_start - message->buffer;
+//     memcpy(new_message, message->buffer, prefix_len);
+// 
+//     // Append the new "Content-Length" value
+//     int bytes_written = snprintf(new_message + prefix_len, 500, "%d\n", new_length);
+// 
+//     char *content_length_end = strstr(content_length_start, "\n"); // Find next newline after Content-Length
+// 
+//     /* copy over up until start of summary */
+//     first_part_length = prefix_len + bytes_written + (summary_start - content_length_end);
+//     memcpy(new_message + prefix_len + bytes_written, content_length_end, summary_start - content_length_end);
+// 
+//     /* copy over first part of summary insertion */
+//     memcpy(new_message + first_part_length, SUMMARY_START, strlen(SUMMARY_START));
+//     /* copy over actual summary */
+//     memcpy(new_message + first_part_length + strlen(SUMMARY_START), summary_endpoint, summary_size);
+//     /* copy over second part of summary insertion */
+//     memcpy(new_message + first_part_length + strlen(SUMMARY_START) + summary_size, SUMMARY_END, strlen(SUMMARY_END));
+//     /* copy over last part of response */
+//     memcpy(new_message + first_part_length + strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END), summary_start, last_part_length);
+// 
+// 
+//     int new_message_length = first_part_length + strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END) + last_part_length;
+//     int str_length = strlen(new_message);
+//     message->total_length = new_message_length > str_length ? new_message_length : str_length;
+//     message->bytes_read = new_message_length > str_length ? new_message_length : str_length;
+//     new_message[message->total_length] = '\0';
+//     free(message->buffer);
+//     message->buffer = new_message;
+// 
+//     return 0;
+// }
 
-    char *page_start = "Wikipedia, the free encyclopedia</div>";
-    char *summary_start = strstr(message->buffer, page_start);
-    if (summary_start == NULL) {
-        return -1;
-    } 
-    summary_start += (strlen(page_start) + 1); /* + 1 for newline */
-    int first_part_length = summary_start - message->buffer;
-    int last_part_length = message->total_length - first_part_length;
-
-    char *new_message = malloc(message->total_length + strlen(SUMMARY_START) + strlen(SUMMARY_END) + strlen(summary_endpoint) + 5); // + 5 in case content length increases
-
+int make_llm_enhanced_response(Message *message, char *endpoint) {
     char *content_length_start = strcasestr(message->buffer, "Content-Length:");
     content_length_start += strlen("Content-Length:");
     while (*content_length_start == ' ' || *content_length_start == '\t') {
         content_length_start++;
     }
     int contentLength = atoi(content_length_start);
-    int new_length = contentLength + strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END) + 2;
+    contentLength += (LLM_ADDITION_SIZE + 2 * strlen(endpoint));
 
+    char *new_message = malloc(message->total_length + LLM_ADDITION_SIZE + 2 * strlen(endpoint) + 10); /* + 10 in case content length increases */
+
+    /* copy over start of message up until content length */
     size_t prefix_len = content_length_start - message->buffer;
     memcpy(new_message, message->buffer, prefix_len);
 
-    // Append the new "Content-Length" value
-    int bytes_written = snprintf(new_message + prefix_len, 500, "%d\n", new_length);
+    /* add the new content length value */
+    int bytes_written = snprintf(new_message + prefix_len, 500, "%d\n", contentLength) - 1; /* - 1 for null terminator */
 
-    char *content_length_end = strstr(content_length_start, "\n"); // Find next newline after Content-Length
+    /* find where to insert llm addition */
+    char *page_start = "Wikipedia, the free encyclopedia</div>";
+    char *addition_start = strstr(message->buffer, page_start);
+    if (addition_start == NULL) {
+        return -1;
+    }
+    addition_start += strlen(page_start) + 1; /* + 1 for newline */
 
-    /* copy over up until start of summary */
-    first_part_length = prefix_len + bytes_written + (summary_start - content_length_end);
-    memcpy(new_message + prefix_len + bytes_written, content_length_end, summary_start - content_length_end);
+    /* copy over line after content length up until start of addition */
+    char *content_length_end = strstr(content_length_start, "\n");
+    memcpy(new_message + prefix_len + bytes_written, content_length_end, addition_start - content_length_end);
+    int first_part_length = prefix_len + bytes_written + (addition_start - content_length_end);
+    int last_part_length = message->buffer + message->total_length - addition_start;
 
-    /* copy over first part of summary insertion */
-    memcpy(new_message + first_part_length, SUMMARY_START, strlen(SUMMARY_START));
-    /* copy over actual summary */
-    memcpy(new_message + first_part_length + strlen(SUMMARY_START), summary_endpoint, summary_size);
-    /* copy over second part of summary insertion */
-    memcpy(new_message + first_part_length + strlen(SUMMARY_START) + summary_size, SUMMARY_END, strlen(SUMMARY_END));
-    /* copy over last part of response */
-    memcpy(new_message + first_part_length + strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END), summary_start, last_part_length);
+    /* insert llm addition */
+    bytes_written = snprintf(new_message + first_part_length, 
+                                LLM_ADDITION_SIZE + 2 * strlen(endpoint) + 2, 
+                                LLM_ADDITION, 
+                                endpoint, endpoint) - 1;
 
+    /* copy over last part of message */
+    memcpy(new_message + first_part_length + bytes_written, addition_start, last_part_length);
 
-    int new_message_length = first_part_length + strlen(SUMMARY_START) + summary_size + strlen(SUMMARY_END) + last_part_length;
-    int str_length = strlen(new_message);
-    message->total_length = new_message_length > str_length ? new_message_length : str_length;
-    message->bytes_read = new_message_length > str_length ? new_message_length : str_length;
+    /* update message struct */
+    message->total_length = first_part_length + bytes_written + last_part_length;
+    message->bytes_read = message->total_length;
     new_message[message->total_length] = '\0';
     free(message->buffer);
     message->buffer = new_message;
-
     return 0;
 }

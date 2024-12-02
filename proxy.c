@@ -1017,10 +1017,11 @@ int main(int argc, char* argv[])
                                 char summary_endpoint[strlen(identifiers[i]) + strlen("https://") + 1];
                                 strcpy(summary_endpoint, "https://");
                                 strcat(summary_endpoint, identifiers[i]);
-                                data html_content;
-                                get_wiki_content(summary_endpoint, &html_content);
+                                // data html_content;
+                                // get_wiki_content(summary_endpoint, &html_content);
                                 // char *simplified_content = simplifyHTML(html_content.response_data, html_content.response_size);
-                                char *simplified_content = simplifyHTML(strstr(partialMessages[i].buffer, "\r\n\r\n") + 4, html_content.response_size);
+                                char *message_body = strstr(partialMessages[i].buffer, "\r\n\r\n") + 4;
+                                char *simplified_content = simplifyHTML(message_body, partialMessages[i].buffer + partialMessages[i].total_length - message_body);
 
                                 /* cache simplified content */
                                 Cache_put(wiki_cache, identifiers[serverSD], simplified_content, strlen(simplified_content), 3600);
@@ -1043,7 +1044,7 @@ int main(int argc, char* argv[])
                                 free(simplified_content);
 
                                 
-                                make_llm_enhanced_response(&partialMessages[i], summary_endpoint, strlen(summary_endpoint));
+                                make_llm_enhanced_response(&partialMessages[i], summary_endpoint);
                                 printf("llm enhanced response:\n");
                                 printf("%s", partialMessages[i].buffer);
                                 
