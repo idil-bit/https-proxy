@@ -307,9 +307,9 @@ int make_llm_enhanced_response(Message *message, char *endpoint) {
         content_length_start++;
     }
     int contentLength = atoi(content_length_start);
-    contentLength += (LLM_ADDITION_SIZE + 2 * strlen(endpoint));
+    contentLength += (LLM_ADDITION_SIZE + 3 * strlen(endpoint));
 
-    char *new_message = malloc(message->total_length + LLM_ADDITION_SIZE + 2 * strlen(endpoint) + 10); /* + 10 in case content length increases */
+    char *new_message = malloc(message->total_length + LLM_ADDITION_SIZE + 3 * strlen(endpoint) + 10); /* + 10 in case content length increases */
 
     /* copy over start of message up until content length */
     size_t prefix_len = content_length_start - message->buffer;
@@ -334,9 +334,9 @@ int make_llm_enhanced_response(Message *message, char *endpoint) {
 
     /* insert llm addition */
     bytes_written = snprintf(new_message + first_part_length, 
-                                LLM_ADDITION_SIZE + 2 * strlen(endpoint) + 2, 
+                                LLM_ADDITION_SIZE + 3 * strlen(endpoint) + 3, 
                                 LLM_ADDITION, 
-                                endpoint, endpoint) - 1;
+                                endpoint, endpoint, endpoint) - 1;
 
     /* copy over last part of message */
     memcpy(new_message + first_part_length + bytes_written, addition_start, last_part_length);

@@ -604,6 +604,34 @@ int main(int argc, char* argv[])
                                     }
                                     
                                     continue;
+                                } else if (strstr(partialMessages[i].buffer, "faq: true") != NULL) {
+                                    printf("got faq request\n");
+
+                                    Cached_item cached_content = Cache_get(wiki_cache, identifier);
+                                    char *simplified_content = cached_content->value;
+                                    char response_body[8192] = "";
+                                    /* set session_id to identifier */
+                                    llmproxy_request("4o-mini", "Come up with three questions for the wikipedia page. Separate them by a vertical bar instead of numbering them.", "", response_body, 1, identifier);
+
+                                    cJSON *json = cJSON_Parse(response_body);
+
+                                    cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
+                                    char *faq = NULL;
+                                    if (cJSON_IsString(result) && (result->valuestring != NULL)) {
+                                        faq = result->valuestring;
+                                    } else {
+                                        faq = "";
+                                    }
+                                    printf("faq: %s\n", faq);
+
+                                    char *summary_response = make_summary_response(faq);
+                                    
+                                    int write_res = SSL_write(connectionTypes[i].ssl, summary_response, strlen(summary_response));
+                                    if (write_res < 0) {
+                                        printf("sending faq to server failed\n");
+                                    }
+                                    
+                                    continue;
                                 }
 
                                 serverSD = clientToServer[i];

@@ -42,7 +42,36 @@
             console.error('Summary fetch error:', error);\n\
         }\n\
     }\n\
-    window.onload = fetchSummary;\n\
+    async function fetchFAQ() {\n\
+        try {\n\
+            const response = await fetch(\"%s\", {\n\
+                                    method: 'GET',\n\
+                                    headers: {\n\
+                                        'faq': 'true'\n\
+                                    }\n\
+                            });\n\
+            if (!response.ok) {\n\
+                throw new Error(`Error: ${response.statusText}`);\n\
+            }\n\
+            const threeQuestions = await response.text(); // Assuming the response is a JSON array of 3 questions\n\
+            const questions = threeQuestions.split('|').map(q => q.trim()).filter(q => q.length > 0);\n\
+            document.getElementById('faq-button-1').textContent = questions[0];\n\
+            document.getElementById('faq-button-1').setAttribute('onclick', `document.getElementById('question-input').value = this.textContent.trim();`);\n\
+            document.getElementById('faq-button-2').textContent = questions[1];\n\
+            document.getElementById('faq-button-2').setAttribute('onclick', `document.getElementById('question-input').value = this.textContent.trim();`);\n\
+            document.getElementById('faq-button-3').textContent = questions[2];\n\
+            document.getElementById('faq-button-3').setAttribute('onclick', `document.getElementById('question-input').value = this.textContent.trim();`);\n\
+        } catch (error) {\n\
+            console.error('Questions fetch error:', error);\n\
+            document.getElementById('faq-button-1').textContent = 'Failed to load faq 1';\n\
+            document.getElementById('faq-button-2').textContent = 'Failed to load faq 2';\n\
+            document.getElementById('faq-button-3').textContent = 'Failed to load faq 3';\n\
+        }\n\
+    }\n\
+    window.onload  = () => {\n\
+        fetchSummary();\n\
+        fetchFAQ();\n\
+    };\n\
 </script>\n\
 <style>\n\
     .qa-container {\n\
@@ -68,6 +97,7 @@
         border-radius: 4px;\n\
         font-size: 14px;\n\
         box-sizing: border-box; /* Ensures padding doesn't affect width calculation */\n\
+        height: auto;\n\
     }\n\
 \n\
     .qa-button {\n\
@@ -78,11 +108,30 @@
         border-radius: 4px;\n\
         cursor: pointer;\n\
         font-size: 14px;\n\
+        height: 48px; /* Explicitly set height to match input field */\n\
+        display: flex;\n\
+        align-items: center; /* Vertically centers the button text */\n\
+        justify-content: center; /* Horizontally centers button text */\n\
+        margin-top: 10px; /* Aligns with input field's margin */\n\
     }\n\
 \n\
     .qa-button:disabled {\n\
         background-color: #aaa;\n\
         cursor: not-allowed;\n\
+    }\n\
+    .faq-button {\n\
+        padding: 10px 20px;\n\
+        color: black;\n\
+        border: none;\n\
+        border-radius: 4px;\n\
+        cursor: pointer;\n\
+        font-size: 14px;\n\
+        width: 100%%;\n\
+        height: 48px; /* Explicitly set height to match input field */\n\
+        display: flex;\n\
+        align-items: center; /* Vertically centers the button text */\n\
+        justify-content: center; /* Horizontally centers button text */\n\
+        margin-top: 10px; /* Aligns with input field's margin */\n\
     }\n\
 \n\
     .loading-indicator {\n\
@@ -98,16 +147,28 @@
         padding: 10px;\n\
         border-radius: 4px;\n\
     }\n\
+    .input-button-wrapper {\n\
+        display: flex;\n\
+        align-items: stretch;\n\
+        gap: 10px;\n\
+    }\n\
 </style>\n\
 <div class=\"qa-container\">\n\
     <div class=\"mw-heading mw-heading2\">\n\
         <h2>Ask a Question</h2>\n\
     </div>\n\
-    <input type=\"text\" id=\"question-input\" class=\"qa-input\" placeholder=\"Type your question here...\"/>\n\
-    <button id=\"submit-question\" class=\"qa-button\" onclick=\"askQuestion()\">Ask</button>\n\
+    <div class=\"input-button-wrapper\">\n\
+        <input type=\"text\" id=\"question-input\" class=\"qa-input\" placeholder=\"Type your question here...\"/>\n\
+        <button id=\"submit-question\" class=\"qa-button\" onclick=\"askQuestion()\">Ask</button>\n\
+    </div>\n\
     <p id=\"loading-indicator\" class=\"loading-indicator\">Loading answer...</p>\n\
     <!-- Initially hidden -->\n\
     <div id=\"qa-result\" class=\"qa-answer\" style=\"display:none;\"></div>\n\
+    <div id=\"predefined-questions\" style=\"margin-top: 15px;\">\n\
+        <button id=\"faq-button-1\" class=\"faq-button\"\">Loading FAQ #1...</button>\n\
+        <button id=\"faq-button-2\" class=\"faq-button\"\">Loading FAQ #2...</button>\n\
+        <button id=\"faq-button-3\" class=\"faq-button\"\">Loading FAQ #3...</button>\n\
+    </div>\n\
 </div>\n\
 <script>\n\
     async function askQuestion() {\n\
@@ -166,7 +227,7 @@
     }\n\
 </script>\n"
 
-#define LLM_ADDITION_SIZE strlen(LLM_ADDITION) - 6 /* - 4 for two %s's and -2 for %%*/
+#define LLM_ADDITION_SIZE strlen(LLM_ADDITION) - 9 /* - 4 for two %s's and -2 for %%*/
 
 #define SUMMARY_START "<style> \n\
                                 .gray-box { \n\
