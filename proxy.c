@@ -416,7 +416,9 @@ int main(int argc, char* argv[])
                         int bytes_written;
                         int bytes_to_read = BUFFER_SIZE;
                         if ((connectionTypes[i].isHTTPs) && !tunnelMode) {
-                            printf("client is in tunnel mode\n");
+                            if (FD_ISSET(i, &wiki_clients)) {
+                                printf("wiki client is in tunnel mode\n");
+                            }
                             do {
                                 if (bytes_to_read > BUFFER_SIZE) {
                                     bytes_to_read = BUFFER_SIZE;
@@ -578,10 +580,14 @@ int main(int argc, char* argv[])
                                     printf("got summary request\n");
 
                                     Cached_item cached_content = Cache_get(wiki_cache, identifier);
+                                    if (cached_content == NULL) {
+                                        /* TODO: use curl to get wiki page */
+                                        continue;
+                                    }
                                     char *simplified_content = cached_content->value;
                                     char response_body[8192] = "";
                                     /* set session_id to identifier */
-                                    llmproxy_request("4o-mini", "Summarize the wikipedia page in less than 500 words. "
+                                    llmproxy_request("4o-mini", "Give a summary of this wikipedia page from its headings in less than 500 words. "
                                                                     "Avoid very short paragraphs.", simplified_content, response_body, 0, identifier);
                                     // llmproxy_request("4o-mini", "Summarize the wikipedia page in a couple sentences", simplified_content, response_body); // TODO: test with different prompts
 
@@ -1026,8 +1032,9 @@ int main(int argc, char* argv[])
                         if (read_result == 2) {
                             /* turn on tunnel mode for server */
                             printf("turning on tunnel mode for server and client\n");
-
-                            connectionTypes[clientSD].isTunnel = true;
+                            if (!FD_ISSET(clientSD, &wiki_clients)) {
+                                connectionTypes[clientSD].isTunnel = true;
+                            }
                             connectionTypes[i].isTunnel = true;
                         } else if (read_result == 0) {
                             // cache only if entire response has been received

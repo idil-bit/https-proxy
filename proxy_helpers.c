@@ -180,7 +180,6 @@ X509 *generate_x509(EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host)
     }
     
     /* Set the serial number. */
-    // ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
     unsigned char serial_bytes[15];
     RAND_bytes(serial_bytes, sizeof(serial_bytes));
 
@@ -237,7 +236,6 @@ X509 *generate_x509(EVP_PKEY *publicKey, EVP_PKEY *privateKey, char *host)
 
     // Create the SAN extension
     // The format is "DNS:hostname", for example, "DNS:example.com"
-    /* TODO: may want to check if host is ip and not dns */
     char san_value[strlen(host) + 5]; // + 5 for "DNS:" and null terminator
 
     struct in_addr ipv4_addr;
@@ -464,12 +462,12 @@ char *simplifyHTML(char *html_content, size_t content_length) {
 
     /* NOTE: I think this will just use the wikipedia header sections, but it seems to be working so maybe keep it? 
      * Otherwise the request will time out */
-    /*
+    
     char *end_of_content = strstr(simplified_content, "References");
     if (end_of_content != NULL) {
         *end_of_content = '\0';
     }
-    */
+    
 
     printf("made simplified content:\n%s\n", simplified_content);
     return simplified_content;
