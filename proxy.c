@@ -469,6 +469,7 @@ int main(int argc, char* argv[])
                     }
                     if (read_result == 4) {
                         FD_SET(i, &write_fd_set);
+                        printf("add to message failed needing write\n");
                         continue;
                     }
                     if (read_result == 0) {
@@ -483,14 +484,14 @@ int main(int argc, char* argv[])
                                 && strstr(identifier, "wikipedia.org") != NULL && strstr(identifier, "wiki/") != NULL
                                 && strstr(identifier, "Main_Page") == NULL 
                                 && strstr(partialMessages[i].buffer, "question: true") != NULL) {
-                                printf("got question\n");
+                                printf("got question from socket %d\n", i);
                                 /* get answer to question from LLM
                                  * pass in 100 for lastk so it has access to the wikipedia page and past questions
                                  * set session_id to the identifier
                                  */
                                 char response_body[8192] = "";
                                 /* set session_id to identifier */
-                                llmproxy_request("4o-mini", "Answer this question in less than 500 words. You can use content from the wikipedia page. ", 
+                                llmproxy_request("4o-mini", "Answer this question in less than 500 words.", 
                                                     strstr(partialMessages[i].buffer, "\r\n\r\n") + 4, response_body, 100, identifier);
 
                                 cJSON *json = cJSON_Parse(response_body);
@@ -507,6 +508,8 @@ int main(int argc, char* argv[])
                                 char *answer_response = make_summary_response(answer);
                                 
                                 int write_res = SSL_write(connectionTypes[i].ssl, answer_response, strlen(answer_response));
+                                close_client(i);
+                                close_server(clientToServer[i]);
                                 if (write_res < 0) {
                                     printf("sending answer to server failed\n");
                                 }
@@ -557,7 +560,7 @@ int main(int argc, char* argv[])
                             }
                             identifiers[serverSD] = get_host(partialMessages[i].buffer);  
                             if (strstr(identifiers[serverSD], "wikipedia.org") != NULL) {
-                                printf("connecting to wikipedia\n");
+                                printf("connecting to wikipedia on socket %d\n", i);
                                 /* make sure that all requests from the client socket now do not accept content encoding */
                                 FD_SET(i, &wiki_clients);
                             }  
@@ -587,7 +590,7 @@ int main(int argc, char* argv[])
                                     char *simplified_content = cached_content->value;
                                     char response_body[8192] = "";
                                     /* set session_id to identifier */
-                                    llmproxy_request("4o-mini", "Give a summary of this wikipedia page from its headings in less than 500 words. "
+                                    llmproxy_request("4o-mini", "Give a summary of this wikipedia page less than 500 words. Here are the headings of the page."
                                                                     "Avoid very short paragraphs.", simplified_content, response_body, 0, identifier);
                                     // llmproxy_request("4o-mini", "Summarize the wikipedia page in a couple sentences", simplified_content, response_body); // TODO: test with different prompts
 
@@ -605,8 +608,36 @@ int main(int argc, char* argv[])
                                     char *summary_response = make_summary_response(summary);
                                     
                                     int write_res = SSL_write(connectionTypes[i].ssl, summary_response, strlen(summary_response));
+                                    close_client(i);
+                                    close_server(clientToServer[i]);
                                     if (write_res < 0) {
                                         printf("sending summary to server failed\n");
+                                    }
+                                    
+                                    continue;
+                                } else if (strstr(partialMessages[i].buffer, "faq: true") != NULL) {
+                                    printf("got faq request\n");
+                                    Cached_item cached_content = Cache_get(wiki_cache, identifier);
+                                    char *simplified_content = cached_content->value;
+                                    char response_body[8192] = "";
+                                    /* set session_id to identifier */
+                                    llmproxy_request("4o-mini", "Come up with three questions for the wikipedia page. Separate them by a vertical bar instead of numbering them.", "", response_body, 1, identifier);
+                                    cJSON *json = cJSON_Parse(response_body);
+                                    cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
+                                    char *faq = NULL;
+                                    if (cJSON_IsString(result) && (result->valuestring != NULL)) {
+                                        faq = result->valuestring;
+                                    } else {
+                                        faq = "";
+                                    }
+                                    printf("faq: %s\n", faq);
+                                    char *summary_response = make_summary_response(faq);
+                                    
+                                    int write_res = SSL_write(connectionTypes[i].ssl, summary_response, strlen(summary_response));
+                                    close_client(i);
+                                    close_server(clientToServer[i]);
+                                    if (write_res < 0) {
+                                        printf("sending faq to server failed\n");
                                     }
                                     
                                     continue;
@@ -1085,7 +1116,6 @@ int main(int argc, char* argv[])
                                 make_llm_enhanced_response(&partialMessages[i], summary_endpoint);
                                 printf("llm enhanced response:\n");
                                 printf("%s", partialMessages[i].buffer);
-                                
 
                                 int clientSD = serverToClient[i];
                                 int write_result;
@@ -1134,7 +1164,9 @@ int main(int argc, char* argv[])
                                         }
                                     }
                                 } while (write_result <= 0);
-                                
+
+                                close_client(clientSD);
+                                close_server(i);
                             }
                             if (partialMessages[i].bytes_read != partialMessages[i].total_length) {
                                 printf("unexpected read of more than one response\n");

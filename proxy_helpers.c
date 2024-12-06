@@ -576,6 +576,7 @@ char *make_summary_response(char *summary) {
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/plain\r\n"
         "Content-Length: %zu\r\n"
+        "Connection: Close\r\n"
         "\r\n"
         "%s";
 

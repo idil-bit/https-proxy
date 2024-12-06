@@ -307,16 +307,18 @@ int make_llm_enhanced_response(Message *message, char *endpoint) {
         content_length_start++;
     }
     int contentLength = atoi(content_length_start);
-    contentLength += (LLM_ADDITION_SIZE + 2 * strlen(endpoint));
+    contentLength += (LLM_ADDITION_SIZE + 3 * strlen(endpoint));
+    printf("new content length%d\n", contentLength);
 
-    char *new_message = malloc(message->total_length + LLM_ADDITION_SIZE + 2 * strlen(endpoint) + 10); /* + 10 in case content length increases */
+    char *connection_close_header = "Connection: close\r\n";
+    char *new_message = malloc(message->total_length + LLM_ADDITION_SIZE + 3 * strlen(endpoint) + strlen(connection_close_header) + 10); /* + 10 in case content length increases */
 
     /* copy over start of message up until content length */
     size_t prefix_len = content_length_start - message->buffer;
     memcpy(new_message, message->buffer, prefix_len);
 
     /* add the new content length value */
-    int bytes_written = snprintf(new_message + prefix_len, 500, "%d\n", contentLength) - 1; /* - 1 for null terminator */
+    int bytes_written = snprintf(new_message + prefix_len, 500, "%d\r\n%s", contentLength, connection_close_header); 
 
     /* find where to insert llm addition */
     char *page_start = "Wikipedia, the free encyclopedia</div>";
@@ -327,16 +329,16 @@ int make_llm_enhanced_response(Message *message, char *endpoint) {
     addition_start += strlen(page_start) + 1; /* + 1 for newline */
 
     /* copy over line after content length up until start of addition */
-    char *content_length_end = strstr(content_length_start, "\n");
+    char *content_length_end = strstr(content_length_start, "\n") + 1;
     memcpy(new_message + prefix_len + bytes_written, content_length_end, addition_start - content_length_end);
     int first_part_length = prefix_len + bytes_written + (addition_start - content_length_end);
     int last_part_length = message->buffer + message->total_length - addition_start;
 
     /* insert llm addition */
     bytes_written = snprintf(new_message + first_part_length, 
-                                LLM_ADDITION_SIZE + 2 * strlen(endpoint) + 2, 
+                                LLM_ADDITION_SIZE + 3 * strlen(endpoint) + 3, 
                                 LLM_ADDITION, 
-                                endpoint, endpoint) - 1;
+                                endpoint, endpoint, endpoint);
 
     /* copy over last part of message */
     memcpy(new_message + first_part_length + bytes_written, addition_start, last_part_length);
