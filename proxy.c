@@ -513,6 +513,9 @@ int main(int argc, char* argv[])
                                 if (write_res < 0) {
                                     printf("sending answer to server failed\n");
                                 }
+
+                                free(partialMessages[i].buffer);
+                                create_Message(&partialMessages[i]);
                                 
                                 continue;
                         }
@@ -613,6 +616,9 @@ int main(int argc, char* argv[])
                                     if (write_res < 0) {
                                         printf("sending summary to server failed\n");
                                     }
+
+                                    free(partialMessages[i].buffer);
+                                    create_Message(&partialMessages[i]);
                                     
                                     continue;
                                 } else if (strstr(partialMessages[i].buffer, "faq: true") != NULL) {
@@ -639,7 +645,10 @@ int main(int argc, char* argv[])
                                     if (write_res < 0) {
                                         printf("sending faq to server failed\n");
                                     }
-                                    
+
+                                    free(partialMessages[i].buffer);
+                                    create_Message(&partialMessages[i]);
+
                                     continue;
                                 }
 
