@@ -128,6 +128,9 @@ int main(int argc, char* argv[])
     int tunnelMode = 0;
     int printMode = 0;
     int llmMode = 1;
+    srand(time(NULL));
+    int session_id = abs(rand());
+    printf("session id: %d\n", session_id);
     if (argc == 3) {
         if (strstr(argv[2], "tunnel") != NULL) {
             tunnelMode = 1;
@@ -491,8 +494,10 @@ int main(int argc, char* argv[])
                                  */
                                 char response_body[8192] = "";
                                 /* set session_id to identifier */
+                                char llm_identifier[strlen(identifiers[serverSD]) + 15];
+                                snprintf(llm_identifier, sizeof(llm_identifier), "%s%d", identifiers[serverSD], session_id);
                                 llmproxy_request("4o-mini", "Answer this question in less than 500 words.", 
-                                                    strstr(partialMessages[i].buffer, "\r\n\r\n") + 4, response_body, 100, identifier);
+                                                    strstr(partialMessages[i].buffer, "\r\n\r\n") + 4, response_body, 100, llm_identifier);
 
                                 cJSON *json = cJSON_Parse(response_body);
 
@@ -593,8 +598,11 @@ int main(int argc, char* argv[])
                                     char *simplified_content = cached_content->value;
                                     char response_body[8192] = "";
                                     /* set session_id to identifier */
-                                    llmproxy_request("4o-mini", "Give a summary of this wikipedia page less than 500 words. Here are the headings of the page."
-                                                                    "Avoid very short paragraphs.", simplified_content, response_body, 0, identifier);
+                                    char llm_identifier[strlen(identifiers[serverSD]) + 15];
+                                    snprintf(llm_identifier, sizeof(llm_identifier), "%s%d", identifiers[serverSD], session_id);
+                                    llmproxy_request("4o-mini", "Give a summary of this wikipedia page to display at the top of the Wikipedia page in less than 500 words." 
+                                                                    "Here are the headings of the page. Avoid very short paragraphs.", 
+                                                                    simplified_content, response_body, 0, llm_identifier);
                                     // llmproxy_request("4o-mini", "Summarize the wikipedia page in a couple sentences", simplified_content, response_body); // TODO: test with different prompts
 
                                     cJSON *json = cJSON_Parse(response_body);
@@ -623,11 +631,12 @@ int main(int argc, char* argv[])
                                     continue;
                                 } else if (strstr(partialMessages[i].buffer, "faq: true") != NULL) {
                                     printf("got faq request\n");
-                                    Cached_item cached_content = Cache_get(wiki_cache, identifier);
-                                    char *simplified_content = cached_content->value;
                                     char response_body[8192] = "";
+
                                     /* set session_id to identifier */
-                                    llmproxy_request("4o-mini", "Come up with three questions for the wikipedia page. Separate them by a vertical bar instead of numbering them.", "", response_body, 1, identifier);
+                                    char llm_identifier[strlen(identifier) + 15];
+                                    snprintf(llm_identifier, sizeof(llm_identifier), "%s%d", identifier, session_id);
+                                    llmproxy_request("4o-mini", "Come up with three questions for the wikipedia page. Separate them by a vertical bar instead of numbering them.", "", response_body, 1, llm_identifier);
                                     cJSON *json = cJSON_Parse(response_body);
                                     cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
                                     char *faq = NULL;
@@ -1074,6 +1083,10 @@ int main(int argc, char* argv[])
                             printf("turning on tunnel mode for server and client\n");
                             if (!FD_ISSET(clientSD, &wiki_clients)) {
                                 connectionTypes[clientSD].isTunnel = true;
+                            } else {
+                                /* won't know to free client message once server response is read in since server is in tunnel mode */
+                                free(partialMessages[clientSD].buffer);
+                                create_Message(&partialMessages[clientSD]);
                             }
                             connectionTypes[i].isTunnel = true;
                         } else if (read_result == 0) {
