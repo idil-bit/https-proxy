@@ -631,12 +631,18 @@ int main(int argc, char* argv[])
                                     continue;
                                 } else if (strstr(partialMessages[i].buffer, "faq: true") != NULL) {
                                     printf("got faq request\n");
+                                    Cached_item cached_content = Cache_get(wiki_cache, identifier);
+                                    if (cached_content == NULL) {
+                                        /* TODO: use curl to get wiki page */
+                                        continue;
+                                    }
+                                    char *simplified_content = cached_content->value;
                                     char response_body[8192] = "";
 
                                     /* set session_id to identifier */
                                     char llm_identifier[strlen(identifier) + 15];
                                     snprintf(llm_identifier, sizeof(llm_identifier), "%s%d", identifier, session_id);
-                                    llmproxy_request("4o-mini", "Come up with three questions for the wikipedia page. Separate them by a vertical bar instead of numbering them.", "", response_body, 1, llm_identifier);
+                                    llmproxy_request("4o-mini", "Come up with three questions for the wikipedia page. Separate them by a vertical bar instead of numbering them.", simplified_content, response_body, 1, llm_identifier);
                                     cJSON *json = cJSON_Parse(response_body);
                                     cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
                                     char *faq = NULL;
