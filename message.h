@@ -177,6 +177,12 @@
     </div>\n\
 </div>\n\
 <script>\n\
+    document.getElementById(\"question-input\").addEventListener(\"keypress\", function (event) { \n\
+        if (event.key === \"Enter\") { // Check if the key pressed is Enter \n\
+            event.preventDefault(); // Prevent the default action (form submission) \n\
+            document.getElementById(\"submit-question\").click(); // Trigger the button click \n\
+        } \n\
+    }); \n\
     async function askQuestion() {\n\
         const questionInput = document.getElementById('question-input');\n\
         const question = questionInput.value.trim();\n\

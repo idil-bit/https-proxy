@@ -494,8 +494,8 @@ int main(int argc, char* argv[])
                                  */
                                 char response_body[8192] = "";
                                 /* set session_id to identifier */
-                                char llm_identifier[strlen(identifiers[serverSD]) + 15];
-                                snprintf(llm_identifier, sizeof(llm_identifier), "%s%d", identifiers[serverSD], session_id);
+                                char llm_identifier[strlen(identifier) + 15];
+                                snprintf(llm_identifier, sizeof(llm_identifier), "%s%d", identifier, session_id);
                                 llmproxy_request("4o-mini", "Answer this question in less than 500 words.", 
                                                     strstr(partialMessages[i].buffer, "\r\n\r\n") + 4, response_body, 100, llm_identifier);
 
@@ -598,8 +598,8 @@ int main(int argc, char* argv[])
                                     char *simplified_content = cached_content->value;
                                     char response_body[8192] = "";
                                     /* set session_id to identifier */
-                                    char llm_identifier[strlen(identifiers[serverSD]) + 15];
-                                    snprintf(llm_identifier, sizeof(llm_identifier), "%s%d", identifiers[serverSD], session_id);
+                                    char llm_identifier[strlen(identifier) + 15];
+                                    snprintf(llm_identifier, sizeof(llm_identifier), "%s%d", identifier, session_id);
                                     llmproxy_request("4o-mini", "Give a summary of this wikipedia page to display at the top of the Wikipedia page in less than 500 words." 
                                                                     "Here are the headings of the page. Avoid very short paragraphs.", 
                                                                     simplified_content, response_body, 0, llm_identifier);
@@ -642,7 +642,7 @@ int main(int argc, char* argv[])
                                     /* set session_id to identifier */
                                     char llm_identifier[strlen(identifier) + 15];
                                     snprintf(llm_identifier, sizeof(llm_identifier), "%s%d", identifier, session_id);
-                                    llmproxy_request("4o-mini", "Come up with three questions for the wikipedia page. Separate them by a vertical bar instead of numbering them.", simplified_content, response_body, 1, llm_identifier);
+                                    llmproxy_request("4o-mini", "Come up with three questions for the wikipedia page. Separate them by a vertical bar instead of numbering them.", simplified_content, response_body, 0, llm_identifier);
                                     cJSON *json = cJSON_Parse(response_body);
                                     cJSON *result = cJSON_GetObjectItemCaseSensitive(json, "result");
                                     char *faq = NULL;
