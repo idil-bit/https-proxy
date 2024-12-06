@@ -58,11 +58,23 @@
             const threeQuestions = await response.text(); // Assuming the response is a JSON array of 3 questions\n\
             const questions = threeQuestions.split('|').map(q => q.trim()).filter(q => q.length > 0);\n\
             document.getElementById('faq-button-1').textContent = questions[0];\n\
-            document.getElementById('faq-button-1').setAttribute('onclick', `document.getElementById('question-input').value = this.textContent.trim();`);\n\
+            document.getElementById('faq-button-1').setAttribute('onclick', \n\
+                `const input = document.getElementById('question-input');\n\
+                 input.value = this.textContent.trim();\n\
+                 input.focus();\n\
+                 input.setSelectionRange(input.value.length, input.value.length);`);\n\
             document.getElementById('faq-button-2').textContent = questions[1];\n\
-            document.getElementById('faq-button-2').setAttribute('onclick', `document.getElementById('question-input').value = this.textContent.trim();`);\n\
+            document.getElementById('faq-button-2').setAttribute('onclick', \n\
+                `const input = document.getElementById('question-input');\n\
+                 input.value = this.textContent.trim();\n\
+                 input.focus();\n\
+                 input.setSelectionRange(input.value.length, input.value.length);`);\n\
             document.getElementById('faq-button-3').textContent = questions[2];\n\
-            document.getElementById('faq-button-3').setAttribute('onclick', `document.getElementById('question-input').value = this.textContent.trim();`);\n\
+            document.getElementById('faq-button-3').setAttribute('onclick', \n\
+                `const input = document.getElementById('question-input');\n\
+                 input.value = this.textContent.trim();\n\
+                 input.focus();\n\
+                 input.setSelectionRange(input.value.length, input.value.length);`);\n\
         } catch (error) {\n\
             console.error('Questions fetch error:', error);\n\
             document.getElementById('faq-button-1').textContent = 'Failed to load faq 1';\n\
