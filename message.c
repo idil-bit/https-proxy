@@ -125,11 +125,11 @@ int add_to_Message(Message *message, int sd, ConnectionType *ct) {
         /* if in tunnel mode, will just send it blindly */
         if (ct->isTunnel) { return 2; }
         // check if header is fully read
-        return check_message(message, sd);
+        return check_message(message);
     }
 }
 
-int check_message(Message *message, int sd) {
+int check_message(Message *message) {
     char *endOfResponse = strstr(message->buffer, "\r\n\r\n");
     if (endOfResponse != NULL) {
         message->header_read = true;
@@ -222,7 +222,7 @@ int update_Message(Message *message) {
 
         message->buffer[message->bytes_read] = '\0';
 
-        return check_message(message, 0);
+        return check_message(message);
     }
 }
 

@@ -319,7 +319,7 @@ typedef struct ConnectionType ConnectionType;
 void create_Message(Message *msg);
 int add_to_Message(Message *message, int sd, ConnectionType *ct);
 void expand_buffer(Message *message);
-int check_message(Message *message, int sd);
+int check_message(Message *message);
 int update_Message(Message *message);
 void remove_header(Message *message, char *header);
 int make_llm_enhanced_response(Message *message, char *endpoint);
